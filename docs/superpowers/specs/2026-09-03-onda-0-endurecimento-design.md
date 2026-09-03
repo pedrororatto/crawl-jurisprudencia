@@ -398,7 +398,6 @@ reverte removendo o prefixo.
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | alerta; segredo |
 | `ALERTA_COOLDOWN_HORAS` | padrão 6 |
 | `WATCHDOG_LIMITE_HORAS` | padrão 36 |
-| `AMBIENTE` | `dev` ou `prod` |
 | `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` | backup; segredo |
 | `BACKUP_RETENCAO_DIARIOS`, `BACKUP_RETENCAO_SEMANAIS` | padrão 7 e 4 |
 
