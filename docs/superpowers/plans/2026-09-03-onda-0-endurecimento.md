@@ -3107,7 +3107,7 @@ git commit -m "Backup com verificação de integridade, retenção e restore tes
 
 Criar `docs/runbook_deploy.md` cobrindo, em ordem, cada seção abaixo. Todo comando precisa ser executável como está, sem lacuna:
 
-1. **Pré-requisitos da VPS** — 8 vCPU, 16 GB RAM, 240 GB NVMe, **no Brasil** (TJBA e TJMS recusaram conexão de fora; ver §9 da spec), Docker e Docker Compose instalados, `awscli` para o backup.
+1. **Pré-requisitos da VPS** — **Hostinger KVM 4** (4 vCPU, 16 GB RAM, 200 GB NVMe), **datacenter em São Paulo** (TJBA e TJMS recusaram conexão de fora do Brasil; ver §9 da spec), Docker e Docker Compose instalados, `awscli` para o backup. Registrar no runbook que o preço promocional (R$ 59,99/mês) exige pré-pagamento anual e a **renovação é R$ 149,99/mês** — para não virar surpresa no segundo ano. Precisar de mais folga é redimensionar para o KVM 8 (8 vCPU, 32 GB), não trocar de provedor.
 2. **Endurecimento do host** — chave SSH e `PasswordAuthentication no`; UFW liberando apenas 22, 80 e 443; fail2ban.
 3. **Repositório e ambiente** — `git clone`, `cp .env.prod.example .env`, geração da senha com `openssl rand -base64 32`, preenchimento do domínio e do bot do Telegram.
 4. **Primeira subida** — `docker compose -f docker-compose.prod.yml up -d db`, depois `docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head`, depois os demais serviços. **A migração roda antes da api e do crawler subirem.**

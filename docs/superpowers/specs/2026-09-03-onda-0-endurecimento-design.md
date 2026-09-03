@@ -245,6 +245,33 @@ versão detalhada, com frescor por tribunal, exige chave.
 `docker-compose.prod.yml` separado, seguindo a convenção de `infra/` que o
 `reis-esteves-squad` já usa. Serviços: `db`, `api`, `crawler`, `caddy`.
 
+#### Hospedagem: Hostinger KVM 4, em São Paulo
+
+**4 vCPU, 16 GB RAM, 200 GB NVMe.** R$ 59,99/mês no promocional anual,
+R$ 149,99/mês na renovação — o segundo valor é o preço real e precisa estar
+no runbook para não virar surpresa. Mais folga é redimensionar para o KVM 8
+(8 vCPU, 32 GB), não trocar de provedor.
+
+**O datacenter tem de ser brasileiro**, e isso é evidência, não preferência:
+TJBA e TJMS recusaram conexão na sondagem feita de fora do país (§9).
+
+**4 vCPU basta, e é dimensionamento e não concessão.** A carga é limitada por
+relógio, não por processador: há `sleep` de 2 s entre requisições por política
+de coleta, e o Chromium fica ocioso a maior parte do tempo. O recurso escasso é
+memória — oito sessões de Chromium a ~400 MB somam ~3,2 GB, e o Postgres com
+4 GB de `shared_buffers` cabe folgado nos 16 GB restantes.
+
+**Serverless foi avaliado e descartado**, por dois motivos independentes. O
+primeiro é de custo com contrapartida nula: IP de saída estável exige Cloud NAT
+a US$ 0,044/h (~US$ 32/mês) só pelo gateway, antes de qualquer compute e antes
+do banco gerenciado, que continuaria necessário. O segundo é decisivo e
+arquitetural: **a paginação do CJSG depende de sessão** — `trocaDePagina.do`
+só funciona dentro da sessão que fez o POST inicial com o token do reCAPTCHA.
+Um coletor sem estado refaria o formulário a cada página, multiplicando por
+cerca de cinco a carga contra o tribunal — exatamente o que provocou o bloqueio
+anterior. Serverless não é caro demais para este trabalho; é incompatível com
+o modelo do coletor.
+
 **A senha do banco sai do repositório.** O `docker-compose.yml` atual traz
 `POSTGRES_PASSWORD: juris` e a URL `postgresql+asyncpg://juris:juris@db:5432/juris`
 escritas no arquivo. Em rede local isso é indiferente; num host público é a
