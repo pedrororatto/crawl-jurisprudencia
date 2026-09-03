@@ -38,6 +38,8 @@ autenticação, e ausência de backup.
    como usuário não-root, senha de banco gerada e fora do repositório.
 9. Backup `pg_dump` com retenção, upload S3-compatível e teste de restore.
 10. `docs/runbook_deploy.md`.
+11. Prefixo de área nos slugs de tema (§3.9), preparando o sistema para outras
+    áreas do direito.
 
 ### Não entra
 
@@ -49,7 +51,13 @@ autenticação, e ausência de backup.
   bloqueado por evidência: a maioria dos hosts e-SAJ não responde da máquina de
   desenvolvimento (§9), então um coletor multi-tribunal escrito agora não teria
   como ser validado contra tribunal novo nenhum.
-- pgvector, chunks, embeddings, busca híbrida — **onda 4**.
+- pgvector, chunks, embeddings, busca híbrida — **onda 4**. É o que o Squad
+  Digital e qualquer outro sistema consumidor vão precisar de fato; a onda 0
+  apenas garante que a base sobre a qual isso será construído não se perca nem
+  pare em silêncio.
+- Campo `area` no YAML e coluna `areas` em `decisoes` — **quando a segunda área
+  existir** (§3.9). Adiar é coerente com o motivo de fazer a onda 0: o Alembic
+  existe justamente para que mudanças de schema fiquem baratas depois.
 - Deploy real na VPS. Ela ainda não existe. A onda entrega artefatos e runbook,
   validados localmente.
 - `git push`. O repositório remoto pode ainda não existir; publicar é ação
@@ -271,6 +279,32 @@ um **MinIO local**, num profile de desenvolvimento do compose — do contrário 
 código que executa pela primeira vez em produção, de madrugada, sem ninguém
 olhando.
 
+### 3.9 Preparação para outras áreas do direito
+
+O sistema já é agnóstico de domínio. Uma verificação em `src/` encontra a
+palavra "digital" em exatamente duas linhas, ambas no título e na descrição do
+FastAPI em `api/main.py`. O coletor não sabe o que é direito digital: recebe uma
+string de busca e a envia ao e-SAJ. Todo o domínio mora em `config/temas.yaml`,
+e o `Tema` já carrega configuração por tema (`campo: ementa` vs `inteiro_teor`).
+
+Acrescentar direito de família ou do consumidor é, portanto, acrescentar
+entradas num arquivo YAML — **exceto por um ponto que fica gravado nos dados.**
+
+**Os slugs são globais e vivem no array `temas` de cada decisão.** Hoje são
+`lgpd`, `marco-civil`, `perfil-falso`. Quando uma segunda área entrar,
+`dano-moral` e `prescricao` vão querer existir em duas áreas ao mesmo tempo, e a
+colisão estará espalhada por centenas de milhares de linhas.
+
+Decisão: **prefixar o slug pela área** — `digital-lgpd`, `digital-marco-civil`.
+Resolve a colisão por convenção de nomenclatura, sem coluna nova e sem parsing
+de separador. Os 10 slugs atuais são renomeados agora, com 49.036 linhas a
+atualizar e um contrato de API que nenhum consumidor usa ainda. É o momento mais
+barato em que essa mudança pode ser feita.
+
+O campo `area` explícito e a coluna `areas` em `decisoes` — necessários para que
+o Squad Digital filtre e não receba acórdão de direito de família — ficam para
+quando a segunda área existir de fato.
+
 ## 4. Modelo de dados
 
 ### Alterações em `decisoes` (revisão 002)
@@ -334,6 +368,24 @@ CREATE TABLE api_key_uso (
   PRIMARY KEY (api_key_id, dia)
 );
 ```
+
+### Prefixo de área nos slugs (revisão 004)
+
+```sql
+-- O guard NOT LIKE torna a migração inofensiva se reexecutada.
+UPDATE decisoes
+   SET temas = ARRAY(
+         SELECT DISTINCT CASE WHEN t LIKE 'digital-%' THEN t ELSE 'digital-' || t END
+           FROM unnest(temas) AS t ORDER BY 1);
+
+UPDATE execucoes
+   SET tema_slug = 'digital-' || tema_slug
+ WHERE tema_slug NOT LIKE 'digital-%';
+```
+
+`metricas_coleta` é criada vazia na revisão 003 e não precisa de renomeação.
+`config/temas.yaml` tem os 10 slugs renomeados no mesmo commit. O `downgrade`
+reverte removendo o prefixo.
 
 ## 5. Interfaces
 
@@ -406,6 +458,8 @@ Acréscimos:
 - Gatilho 3 **não** dispara numa rodada em que os temas retornaram resultados
   mas nenhuma decisão era nova — o falso positivo que mataria o canal.
 - Watchdog dispara com `ultima_execucao` envelhecido artificialmente.
+- Renomeação de slug preserva a contagem por tema e é idempotente se
+  reexecutada (nada vira `digital-digital-lgpd`).
 - **`alembic upgrade head` em banco vazio seguido de `autogenerate` produzindo
   diff vazio.** Este é o teste mais valioso da onda: é o que impede `models.py`
   e as migrations divergirem, o modo de falha clássico de quem adota Alembic num
@@ -423,6 +477,7 @@ Acréscimos:
 | 6 | Bloqueio injetado dispara Telegram uma vez; repetição em 6 h é suprimida |
 | 7 | Watchdog dispara com watermark envelhecido |
 | 8 | `pytest` verde e log de uma rodada curta na casa de dezenas de linhas |
+| 9 | Após a revisão 004, a soma das contagens por tema é idêntica à anterior e todo slug começa com `digital-` |
 
 ## 9. Evidência que motivou decisões
 
@@ -454,6 +509,31 @@ coletor genérico e recomendar VPS no Brasil.
 | Rodar containers como não-root pode quebrar o Playwright | Validado localmente antes de entrar no runbook; se quebrar, o fallback documentado é `--no-sandbox` com o risco registrado |
 | Métricas construídas para um scheduler serial serão parcialmente reescritas na onda 1 | Aceito conscientemente: são poucas horas de retrabalho, contra o custo de projetar a fila sem informação |
 | Alerta por Telegram depende de serviço de terceiro | Watchdog independente; falha de entrega não derruba coleta |
+| **Uma área nova do direito pode, sozinha, ser maior que todo o acervo atual** | Ver abaixo |
+
+### O risco de volume ao abrir uma área nova
+
+Este é o risco que a modularidade fácil esconde, e ele não é proporcional ao
+número de temas.
+
+O tempo de coleta escala bem. A rodada incremental completa medida no log levou
+146 segundos para 10 temas — cerca de 15 s por tema. Com os workers paralelos da
+onda 1 (um por tribunal), quatro áreas de ~45 temas dão cerca de 45 minutos de
+relógio por dia por tribunal. O backfill histórico de uma área nova custa da
+ordem de 18 horas por tribunal, uma única vez. Ambos são confortáveis.
+
+O que **não** escala por analogia é o tamanho das áreas. Direito digital é uma
+área estreita: 49.036 acórdãos em seis anos de TJSP de segundo grau. Direito do
+consumidor, civil ou trabalhista no mesmo tribunal são uma ou duas ordens de
+grandeza maiores — o TJSP julga milhões de processos. Uma única área larga pode
+exceder sozinha tudo o que existe hoje na base, e isso muda armazenamento, custo
+de embedding, tempo de construção do índice HNSW e janela de backfill de forma
+não linear com o número de temas.
+
+**Mitigação, e é a mesma disciplina imposta à coleta por assunto CNJ na onda 2:
+antes de comprometer prazo com uma área nova, coletar um mês de amostra e medir
+o volume.** Se um mês de uma área devolver dezenas de milhares de acórdãos, ela
+entra com recorte adicional, ou não entra.
 
 ## 11. Referências
 
