@@ -1,0 +1,44 @@
+# Termos curados de "direito digital" usados na busca livre do CJSG (e-SAJ/TJSP).
+# Sintaxe aceita pelo e-SAJ: aspas para frase exata, operadores E / OU / NÃO.
+# Este arquivo pode ser editado sem mexer em código; o scheduler relê a cada rodada.
+temas:
+  - slug: lgpd
+    nome: LGPD / Proteção de dados pessoais
+    busca: '"Lei Geral de Proteção de Dados" OU "LGPD"'
+
+  - slug: marco-civil
+    nome: Marco Civil da Internet
+    busca: '"Marco Civil da Internet"'
+
+  - slug: vazamento-dados
+    nome: Vazamento de dados
+    busca: '"vazamento de dados"'
+
+  - slug: fraude-eletronica
+    nome: Fraude eletrônica / golpes online
+    busca: '"fraude eletrônica" OU "golpe do pix" OU "fraude bancária pela internet"'
+
+  - slug: crimes-ciberneticos
+    nome: Crimes cibernéticos
+    busca: '"crime cibernético" OU "estelionato digital" OU "invasão de dispositivo informático"'
+
+  - slug: remocao-conteudo
+    nome: Remoção de conteúdo / responsabilidade de provedores
+    busca: '"remoção de conteúdo" E "provedor"'
+
+  - slug: perfil-falso
+    nome: Perfil falso em redes sociais
+    busca: '"perfil falso"'
+
+  - slug: imagens-intimas
+    nome: Divulgação não consentida de imagens íntimas
+    busca: '"pornografia de vingança" OU "divulgação de imagens íntimas"'
+
+  - slug: comercio-eletronico
+    nome: Comércio eletrônico
+    busca: '"comércio eletrônico" E ("fraude" OU "consumidor")'
+
+  - slug: assinatura-eletronica
+    nome: Assinatura e documento eletrônico
+    busca: '"assinatura eletrônica" OU "assinatura digital"'
+    campo: ementa
