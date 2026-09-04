@@ -128,7 +128,7 @@ async def listar_temas(session: AsyncSession = Depends(get_session)) -> list[Tem
     ]
 
 
-@router.get("/health", response_model=HealthInfo)
+@router.get("/health", response_model=HealthInfo, response_model_exclude_none=True)
 async def health(
     chave: ApiKey | None = Depends(chave_opcional),
     session: AsyncSession = Depends(get_session),

@@ -10,7 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import secrets
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select, text
@@ -24,7 +24,20 @@ from juris.logging_config import configurar_logging
 PREFIXO = "juris_"
 # "interno" alcança tudo que "publico" alcança.
 _ABRANGENCIA = {"publico": {"publico"}, "interno": {"publico", "interno"}}
-_RECUSA = HTTPException(status_code=401, detail="Chave de API ausente ou inválida")
+
+
+def _recusa() -> HTTPException:
+    """Instância nova a cada recusa.
+
+    Reerguer a mesma instância global acumula traceback indefinidamente
+    (CPython anexa frames a __traceback__ a cada `raise` da mesma exceção,
+    nunca substitui) e cada frame retido prende as variáveis locais de quem
+    o levantou — inclusive o `authorization` de `_dependencia`, ou seja, a
+    chave em claro apresentada pelo chamador. Qualquer tráfego não
+    autenticado bateria contra um objeto global crescendo sem limite e
+    guardando chaves alheias pela vida inteira do processo.
+    """
+    return HTTPException(status_code=401, detail="Chave de API ausente ou inválida")
 
 
 def hash_da_chave(chave: str) -> str:
@@ -83,8 +96,12 @@ async def _buscar_chave(session: AsyncSession, apresentada: str) -> ApiKey | Non
 
 
 async def _registrar_uso(session: AsyncSession, registro: ApiKey) -> int:
-    """Incrementa e devolve a contagem do dia."""
-    hoje = date.today()
+    """Incrementa e devolve a contagem do dia.
+
+    O dia é UTC, como `ultimo_uso_em` — usar o relógio local faria a virada
+    de cota acontecer numa hora diferente da que os timestamps registram.
+    """
+    hoje = datetime.now(timezone.utc).date()
     usadas = await session.scalar(
         text(
             """
@@ -110,11 +127,11 @@ def exigir_chave(escopo: str = "publico"):
         session: AsyncSession = Depends(get_session),
     ) -> ApiKey:
         if not authorization or not authorization.lower().startswith("bearer "):
-            raise _RECUSA
+            raise _recusa()
         registro = await _buscar_chave(session, authorization[7:].strip())
         if registro is None:
-            raise _RECUSA
-        if escopo not in _ABRANGENCIA[registro.escopo]:
+            raise _recusa()
+        if escopo not in _ABRANGENCIA.get(registro.escopo, frozenset()):
             raise HTTPException(
                 status_code=403, detail=f"Esta chave não alcança o escopo {escopo!r}"
             )

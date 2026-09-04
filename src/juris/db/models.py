@@ -184,7 +184,17 @@ class ApiKeyUso(Base):
     """Contagem diária por chave.
 
     A chave primária (api_key_id, dia) faz a contagem se reiniciar sozinha a
-    cada dia, sem cron de reset, e já serve de base para cobrança.
+    cada dia, sem cron de reset.
+
+    O que esta coluna conta: toda requisição autenticada que chegou ao
+    limitador, incluindo as que ele rejeitou por estourar `limite_diario`
+    (o incremento acontece antes da checagem — de propósito, para não dar
+    tentativa de graça a quem já bateu no teto). NÃO conta requisição
+    recusada por escopo insuficiente (403): essa checagem vem antes do
+    incremento. Ou seja, esta tabela é uma contagem de uso para limitação de
+    taxa, não uma contagem de sucessos — uma futura cobrança baseada nela
+    teria que separar servidas de rejeitadas primeiro, o que ainda não
+    existe aqui.
     """
 
     __tablename__ = "api_key_uso"

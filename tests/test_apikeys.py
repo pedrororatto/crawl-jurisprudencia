@@ -67,9 +67,18 @@ async def test_chave_valida_aceita(session, app_de_teste):
 
 
 async def test_chave_inativa_recusa(session, app_de_teste):
+    """Mesmo corpo do 401 de chave ausente/inválida — ver o teste acima.
+
+    A propriedade de mensagem idêntica precisa ficar fixada por asserção, não
+    por identidade de objeto: cada recusa agora ergue uma HTTPException nova
+    (ver `_recusa()` em apikeys.py), então só o conteúdo comparável importa.
+    """
     chave, _ = await criar_chave(session, nome="squad", escopo="publico")
     await session.execute(text("UPDATE api_keys SET ativa = false WHERE nome = 'squad'"))
-    assert (await _get(app_de_teste, "/publico", chave=chave)).status_code == 401
+    sem = await _get(app_de_teste, "/publico")
+    resposta = await _get(app_de_teste, "/publico", chave=chave)
+    assert resposta.status_code == 401
+    assert resposta.json() == sem.json()
 
 
 async def test_escopo_insuficiente_recusa(session, app_de_teste):
@@ -101,10 +110,27 @@ async def test_health_anonimo_nao_revela_o_acervo(session):
     try:
         resposta = await _get(app, "/v1/health")
         assert resposta.status_code == 200
-        assert resposta.json() == {
-            "status": "ok",
-            "total_decisoes": None,
-            "ultima_coleta": None,
-        }
+        assert resposta.json() == {"status": "ok"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_health_com_chave_revogada_degrada_para_o_anonimo(session):
+    """Chave revogada em /v1/health não deve virar erro nem vazar o acervo:
+    degrada exatamente para o mesmo corpo do chamador anônimo."""
+    from juris.api.deps import get_session
+    from juris.api.main import app
+
+    chave, _ = await criar_chave(session, nome="squad", escopo="publico")
+    await session.execute(text("UPDATE api_keys SET ativa = false WHERE nome = 'squad'"))
+
+    async def _session_de_teste():
+        yield session
+
+    app.dependency_overrides[get_session] = _session_de_teste
+    try:
+        resposta = await _get(app, "/v1/health", chave=chave)
+        assert resposta.status_code == 200
+        assert resposta.json() == {"status": "ok"}
     finally:
         app.dependency_overrides.clear()
