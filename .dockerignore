@@ -1,0 +1,24 @@
+# Segredos: nada com valor real de credencial pode entrar no contexto de
+# build. O `COPY . .` do Dockerfile copia tudo que não estiver aqui, e uma
+# camada de imagem guarda o conteúdo para sempre — mesmo depois de trocar a
+# senha, quem tiver acesso à imagem ainda lê o valor antigo. Nada do runtime
+# depende de um .env dentro da imagem (as variáveis chegam via
+# `environment:` do compose), então os exemplos também ficam de fora: é mais
+# simples manter a regra única do que abrir exceção. Se um dia algo precisar
+# ler um desses arquivos em build time, remova a linha aqui com atenção ao
+# que isso reabre.
+.env
+.env.*
+
+# Bloat do contexto de build: nada disso é necessário para o `uv sync`
+# reconstruir o ambiente dentro da imagem.
+.venv/
+.git/
+logs/
+run/
+backups/
+.superpowers/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
