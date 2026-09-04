@@ -41,7 +41,7 @@ config/temas.yaml ──> scheduler ──> collectors/tjsp_cjsg (crawl4ai/Playw
 uv sync
 uv run playwright install chromium
 docker compose up -d db
-uv run python -m juris.db.init
+uv run alembic upgrade head
 
 # coleta de teste (1 tema, 2 páginas)
 uv run python -m juris.scheduler --once --tema lgpd --max-paginas 2 --desde 2026-07-01

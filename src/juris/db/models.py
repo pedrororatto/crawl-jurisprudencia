@@ -63,7 +63,7 @@ class Decisao(Base):
         Index("ix_decisoes_temas", "temas", postgresql_using="gin"),
         # Casamento por similaridade (trigram: ILIKE, %, %>) rápido em
         # ementa_texto, para não depender só do stemmer do full-text
-        # (veja pg_trgm em db/init.py).
+        # (veja pg_trgm em alembic/versions/001_baseline.py).
         Index(
             "ix_decisoes_ementa_trgm",
             "ementa_texto",
