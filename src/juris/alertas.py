@@ -26,10 +26,14 @@ _TIMEOUT_SEGUNDOS = 10.0
 async def _enviar_telegram(mensagem: str) -> None:
     """Envia de fato. Isolado numa função para o teste substituir.
 
-    Atenção: se algum dia se habilitar logging DEBUG das bibliotecas httpx
-    ou httpcore, elas próprias podem registrar a URL da requisição — e a URL
-    carrega o token do bot. O cuidado abaixo com o logger deste módulo não
-    cobre esse caminho.
+    Atenção: a URL carrega o token do bot — a API do Telegram o exige no
+    path, não há variante por header. O httpx registra a URL completa em
+    INFO a cada requisição BEM-SUCEDIDA (não é preciso habilitar DEBUG), e
+    esse era um vazamento real: o cuidado deste módulo com `exc_info` só
+    cobre o caminho de exceção. Quem fecha isso é `juris.logging_config`,
+    que baixa `httpx`/`httpcore` para WARNING e ainda passa todo registro
+    por um filtro de redação. Qualquer processo que fale com o Telegram sem
+    chamar `configurar_logging()` reabre o vazamento.
     """
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=_TIMEOUT_SEGUNDOS) as client:
