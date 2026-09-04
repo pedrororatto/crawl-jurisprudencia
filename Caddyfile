@@ -1,0 +1,21 @@
+# TLS automático via Let's Encrypt. Substitua o domínio no deploy.
+{$JURIS_DOMINIO} {
+	encode gzip
+
+	# A API não publica porta no host: só o Caddy a alcança, pela rede interna
+	# do compose.
+	reverse_proxy api:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

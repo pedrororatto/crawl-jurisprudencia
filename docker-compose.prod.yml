@@ -1,0 +1,81 @@
+# Produção. Diferenças conscientes em relação ao docker-compose.yml de
+# desenvolvimento:
+#   - o Postgres NÃO publica porta, nem em loopback: api e crawler o alcançam
+#     pela rede do compose, e administração se faz por `docker compose exec`;
+#   - a api também não publica porta: só o Caddy fala com ela;
+#   - nenhuma senha tem valor padrão — falta de variável derruba a subida, que
+#     é o comportamento desejado em produção.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: juris
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: juris
+    volumes:
+      - juris_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U juris"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: uvicorn juris.api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      JURIS_DATABASE_URL: postgresql+asyncpg://juris:${POSTGRES_PASSWORD}@db:5432/juris
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  crawler:
+    build: .
+    restart: unless-stopped
+    command: python -m juris.scheduler
+    environment:
+      JURIS_DATABASE_URL: postgresql+asyncpg://juris:${POSTGRES_PASSWORD}@db:5432/juris
+      JURIS_TELEGRAM_BOT_TOKEN: ${JURIS_TELEGRAM_BOT_TOKEN}
+      JURIS_TELEGRAM_CHAT_ID: ${JURIS_TELEGRAM_CHAT_ID}
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      JURIS_DOMINIO: ${JURIS_DOMINIO:?defina JURIS_DOMINIO no .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+volumes:
+  juris_pgdata:
+  caddy_data:
+  caddy_config:
