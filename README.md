@@ -64,6 +64,8 @@ uv run python -m juris.scheduler
 uv run uvicorn juris.api.main:app --port 8000
 ```
 
+Para subir em servidor, siga [docs/runbook_deploy.md](docs/runbook_deploy.md).
+
 ## Endpoints (v1)
 
 | Endpoint | Descrição |
