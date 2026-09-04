@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -132,5 +134,58 @@ async def test_health_com_chave_revogada_degrada_para_o_anonimo(session):
         resposta = await _get(app, "/v1/health", chave=chave)
         assert resposta.status_code == 200
         assert resposta.json() == {"status": "ok"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_health_autenticado_revela_o_acervo_mesmo_sem_coleta_ainda(session):
+    """Regressão do round 2: response_model_exclude_none, usado para o corpo
+    anônimo bater com {"status": "ok"}, também escondia um ultima_coleta=null
+    legítimo do ramo autenticado — o estado de um serviço recém-implantado,
+    sem nenhuma coleta ainda, que é exatamente o que este plano prepara.
+    O campo tem que aparecer no JSON como null, não ficar ausente."""
+    from juris.api.deps import get_session
+    from juris.api.main import app
+
+    chave, _ = await criar_chave(session, nome="squad", escopo="publico")
+
+    async def _session_de_teste():
+        yield session
+
+    app.dependency_overrides[get_session] = _session_de_teste
+    try:
+        resposta = await _get(app, "/v1/health", chave=chave)
+        assert resposta.status_code == 200
+        corpo = resposta.json()
+        assert corpo["status"] == "ok"
+        assert corpo["total_decisoes"] == 0
+        assert "ultima_coleta" in corpo
+        assert corpo["ultima_coleta"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_health_autenticado_revela_a_ultima_coleta_real(session):
+    """Com uma execução real registrada, o ramo autenticado devolve o
+    timestamp de fato — não um valor apagado ou zerado."""
+    from juris.api.deps import get_session
+    from juris.api.main import app
+    from juris.db.models import Execucao
+
+    chave, _ = await criar_chave(session, nome="squad", escopo="publico")
+    quando = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    session.add(Execucao(tribunal="TJSP", tema_slug="digital-lgpd", ultima_execucao=quando))
+    await session.commit()
+
+    async def _session_de_teste():
+        yield session
+
+    app.dependency_overrides[get_session] = _session_de_teste
+    try:
+        resposta = await _get(app, "/v1/health", chave=chave)
+        assert resposta.status_code == 200
+        corpo = resposta.json()
+        assert corpo["total_decisoes"] == 0
+        assert datetime.fromisoformat(corpo["ultima_coleta"].replace("Z", "+00:00")) == quando
     finally:
         app.dependency_overrides.clear()

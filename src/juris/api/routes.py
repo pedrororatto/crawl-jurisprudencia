@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,18 +129,28 @@ async def listar_temas(session: AsyncSession = Depends(get_session)) -> list[Tem
     ]
 
 
-@router.get("/health", response_model=HealthInfo, response_model_exclude_none=True)
+@router.get("/health", response_model=HealthInfo)
 async def health(
     chave: ApiKey | None = Depends(chave_opcional),
     session: AsyncSession = Depends(get_session),
-) -> HealthInfo:
+):
     """Chamador anônimo recebe só o estado.
 
     Total de decisões e ritmo de coleta são informação de negócio: entregá-los
     a qualquer varredura num IP público não tem contrapartida.
+
+    Os dois ramos devolvem documentos genuinamente diferentes (o anônimo não
+    tem — nem deve simular ter — os campos de acervo), por isso a resposta é
+    montada explicitamente em cada um, em vez de usar
+    response_model_exclude_none: esse flag vale para o endpoint inteiro, e
+    também apagaria um ultima_coleta=null legítimo do ramo autenticado (ex.:
+    serviço recém-implantado, sem nenhuma coleta ainda) — abaixo do prometido
+    pelo schema HealthInfo. Retornar um Response aqui contorna a serialização
+    de response_model só para este ramo, comportamento documentado do
+    FastAPI.
     """
     if chave is None:
-        return HealthInfo(status="ok")
+        return JSONResponse({"status": "ok"})
 
     total = await session.scalar(select(func.count()).select_from(Decisao))
     ultima = await session.scalar(select(func.max(Execucao.ultima_execucao)))
