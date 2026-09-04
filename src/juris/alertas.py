@@ -54,6 +54,14 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
     Devolve True se enviou, False se suprimiu, se não há bot configurado ou
     se a entrega falhou. Nunca levanta exceção: o chamador é uma rodada de
     coleta, e alerta não pode derrubar coleta.
+
+    Pré-condição: `session` não pode ter trabalho não commitado do chamador
+    no momento da chamada. Uma falha de banco aqui é recuperada com
+    `session.rollback()`, que descartaria esse trabalho junto — a função é
+    feita para ser chamada repetidamente sobre uma sessão compartilhada
+    dentro de uma mesma rodada (ex.: um loop de Task 7 chamando alertar()
+    várias vezes), e cada chamada precisa deixar a sessão utilizável para a
+    próxima, mesmo depois de um erro.
     """
     if not (settings.telegram_bot_token and settings.telegram_chat_id):
         logger.warning("Alerta não enviado (bot do Telegram não configurado): %s", mensagem)
@@ -68,6 +76,15 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
         # neste sistema — o alerta perdido é exatamente o modo de falha que
         # este módulo existe para evitar. Por isso seguimos como se não
         # estivesse em cooldown.
+        #
+        # O rollback é obrigatório aqui: sem ele, a sessão fica marcada como
+        # exigindo rollback (PendingRollbackError) e toda chamada seguinte a
+        # alertar() nesta mesma sessão passa a falhar do mesmo jeito — o que
+        # inverte o propósito deste módulo, trocando um erro alto e limitado
+        # (a rodada quebra num ponto conhecido) por um silencioso e sem
+        # limite (nenhum cooldown mais se sustenta, todo alerta passa a
+        # sair sem filtro).
+        await session.rollback()
         logger.error("Falha ao consultar cooldown de %r; enviando mesmo assim", chave)
         em_cooldown = False
 
@@ -94,7 +111,9 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
         # A mensagem já foi entregue nesse ponto. Uma falha ao gravar o
         # cooldown não pode virar "a entrega falhou" para quem chamou —
         # o preço é um possível alerta duplicado na próxima rodada, não um
-        # alerta engolido nesta.
+        # alerta engolido nesta. Mesmo motivo do rollback acima: sem ele, a
+        # sessão fica inutilizável para a próxima chamada de alertar().
+        await session.rollback()
         logger.error("Alerta %r entregue, mas falha ao gravar o cooldown", chave)
         return True
 

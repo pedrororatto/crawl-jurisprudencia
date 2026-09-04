@@ -132,3 +132,66 @@ async def test_falha_ao_gravar_cooldown_apos_envio_nao_propaga(
     monkeypatch.setattr(session, "commit", _commit_explode)
     assert await alertar(session, "bloqueio:TJSP", "msg") is True
     assert telegram_falso == ["msg"]
+
+
+async def test_falha_ao_consultar_cooldown_recupera_a_sessao(
+    session, telegram_falso, monkeypatch
+):
+    """alertar() é chamada repetidamente sobre uma sessão compartilhada numa
+    mesma rodada (é assim que a Task 7 vai usá-la). Uma falha de banco de
+    verdade na leitura do cooldown — não um RuntimeError sintético — precisa
+    deixar a sessão utilizável para a chamada seguinte; sem rollback, o erro
+    real do Postgres deixa a sessão marcada como exigindo rollback e toda
+    chamada seguinte de alertar() nessa sessão passa a falhar do mesmo jeito,
+    perdendo o cooldown para sempre (é isso que a segunda chamada, abaixo,
+    verifica de fato — não apenas que a primeira não propagou).
+    """
+    _em_cooldown_original = alertas._em_cooldown
+
+    async def _em_cooldown_quebrada(session, chave):
+        # Erro real do banco (divisão por zero no Postgres), para reproduzir
+        # o estado de sessão que um DBAPIError de verdade deixa — um mock
+        # que só levanta RuntimeError nunca chega a sujar a sessão real.
+        await session.execute(text("SELECT 1/0"))
+        return False  # nunca alcançado
+
+    monkeypatch.setattr(alertas, "_em_cooldown", _em_cooldown_quebrada)
+    assert await alertar(session, "bloqueio:TJSP", "primeira") is True
+
+    monkeypatch.setattr(alertas, "_em_cooldown", _em_cooldown_original)
+    # Se a sessão não foi recuperada, esta chamada levantaria
+    # PendingRollbackError (capturado pelo guard de cooldown, que então
+    # trataria "não sei" como "não está em cooldown" e enviaria de novo) —
+    # o cooldown gravado pela primeira chamada deixaria de valer.
+    assert await alertar(session, "bloqueio:TJSP", "segunda") is False
+    assert telegram_falso == ["primeira"]
+
+
+async def test_falha_ao_gravar_cooldown_recupera_a_sessao(session, telegram_falso, monkeypatch):
+    """Mesma garantia do teste acima, para a região de persistência pós-envio.
+
+    Pré-existe um cooldown válido (commitado) para uma chave; uma falha real
+    de banco ao gravar o cooldown de OUTRA chave não pode deixar a sessão
+    incapaz de continuar respeitando o cooldown já commitado.
+    """
+    await session.execute(
+        text("INSERT INTO alertas_enviados (chave, enviado_em) VALUES ('bloqueio:TJSP', now())")
+    )
+    await session.commit()
+
+    commit_original = session.commit
+
+    async def _commit_quebrado():
+        # Erro real do banco, pelo mesmo motivo do teste acima.
+        await session.execute(text("SELECT 1/0"))
+
+    monkeypatch.setattr(session, "commit", _commit_quebrado)
+    assert await alertar(session, "bloqueio:TJCE", "nova") is True
+
+    monkeypatch.setattr(session, "commit", commit_original)
+    # Se a sessão não foi recuperada, o guard de cooldown desta chamada
+    # levantaria PendingRollbackError ao consultar 'bloqueio:TJSP', seria
+    # engolido do mesmo jeito e o cooldown já commitado deixaria de ser
+    # respeitado.
+    assert await alertar(session, "bloqueio:TJSP", "nao deveria enviar") is False
+    assert telegram_falso == ["nova"]
