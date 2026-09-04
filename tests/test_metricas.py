@@ -62,7 +62,7 @@ async def test_bloqueio_alerta_de_imediato(session, alertas_capturados):
 
 
 async def test_tres_rodadas_falhas_seguidas_alertam(session, alertas_capturados):
-    # rodada() grava a métrica da rodada atual e só then chama
+    # rodada() grava a métrica da rodada atual e só então chama
     # avaliar_gatilhos (veja o docstring de alertar() e a ordem em
     # scheduler.rodada) — na hora em que o gatilho roda, a própria rodada
     # atual já está registrada em metricas_coleta. Por isso são 3 linhas
