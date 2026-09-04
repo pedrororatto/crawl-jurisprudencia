@@ -168,6 +168,40 @@ async def test_falhas_seguidas_nao_conta_backfill_como_falha(session, alertas_ca
     assert "falhas-seguidas:TJSP:digital-lgpd" not in [c for c, _ in alertas_capturados]
 
 
+@pytest.mark.parametrize("tipo_rodada", ["tema", "periodo"])
+async def test_falhas_seguidas_nao_alerta_em_rodada_parcial(
+    session, alertas_capturados, tipo_rodada
+):
+    """Filtrar o histórico em `_falhas_seguidas` não basta: o gatilho também
+    precisa ser guardado. "Falhou em 3 rodadas seguidas" é uma afirmação sobre
+    a coleta diária; disparada por uma rodada `--tema` que deu timeout, ela
+    não descreve a rodada que acabou de acontecer e ainda queima a chave de
+    cooldown compartilhada, suprimindo o alerta da incremental de verdade nas
+    seis horas seguintes.
+    """
+    for _ in range(3):
+        await _metrica(session, falhou=True, tipo_rodada="incremental")
+    falho = ResultadoTema(
+        tema_slug="digital-lgpd", novas=0, atualizadas=0, paginas=0, resultados=0,
+        falhou=True, erro="timeout", tipo_erro="TimeoutError", duracao_s=1.0,
+    )
+    await avaliar_gatilhos(session, "TJSP", [falho], tipo_rodada)
+    assert "falhas-seguidas:TJSP:digital-lgpd" not in [c for c, _ in alertas_capturados]
+
+
+async def test_bloqueio_alerta_mesmo_em_rodada_parcial(session, alertas_capturados):
+    """O gatilho 1 é o oposto dos outros dois: a spec o define como "imediato,
+    sempre". Um bloqueio anti-robô durante o teste de fumaça é tão real quanto
+    um durante a rodada das 03:00 — este projeto já foi bloqueado uma vez."""
+    falho = ResultadoTema(
+        tema_slug="digital-lgpd", novas=0, atualizadas=0, paginas=0, resultados=0,
+        falhou=True, erro="e-SAJ apresentou desafio",
+        tipo_erro=BloqueioDetectadoError.__name__, duracao_s=3.0,
+    )
+    await avaliar_gatilhos(session, "TJSP", [falho], "tema")
+    assert "bloqueio:TJSP:digital-lgpd" in [c for c, _ in alertas_capturados]
+
+
 def test_tipo_de_rodada_sai_dos_argumentos():
     from datetime import date
 

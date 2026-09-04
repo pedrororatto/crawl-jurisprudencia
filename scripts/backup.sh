@@ -7,7 +7,21 @@ set -euo pipefail
 
 # O cron não carrega .env. Sem isto o upload some em silêncio e o backup
 # passa a existir só na máquina que ele deveria proteger.
-[[ -f .env ]] && { set -a; . ./.env; set +a; }
+#
+# O ensaio em `bash -ec` antes do `source` de verdade existe porque o
+# `source` acontece antes do pg_dump: um .env que o bash não consiga ler
+# (valor com espaço, aspas, `$` — o parser do Compose aceita coisas que o
+# shell não) derrubaria o script inteiro com um "command not found" e rc=127,
+# sem gerar dump nenhum e sem dizer o que aconteceu. Melhor nomear a falha.
+if [[ -f .env ]]; then
+  bash -ec 'set -a; . ./.env' || {
+    echo "ERRO: o bash não consegue ler o .env (veja a mensagem acima)." >&2
+    echo "      Valores com espaço, aspas, '\$' ou '#' precisam de aspas" >&2
+    echo "      simples. Nenhum backup foi gerado." >&2
+    exit 1
+  }
+  set -a; . ./.env; set +a
+fi
 
 COMPOSE="${1:-docker-compose.yml}"
 DESTINO="${JURIS_BACKUP_DIR:-backups}"
@@ -87,8 +101,12 @@ fi
 ls -1t "$DESTINO"/juris-*.dump 2>/dev/null | tail -n +$((RETENCAO_DIARIOS + 1)) | xargs -r rm -- || true
 ls -1t "$DESTINO"/semanal-*.dump 2>/dev/null | tail -n +$((RETENCAO_SEMANAIS + 1)) | xargs -r rm -- || true
 
-# Sidecar de contagem órfão (dump que a retenção acima já apagou) não serve
-# mais para nada e só acumula.
+# Arquivo irmão órfão (dump que a retenção acima já apagou) não serve mais
+# para nada e só acumula. Sem `|| true`, ao contrário das duas linhas de
+# retenção acima: aqui um `rm` só falha por problema real (permissão, FS
+# somente-leitura), nunca por "não havia nada para apagar" — o `[[ -e ]]`
+# já cobre esse caso. Sair diferente de zero é a resposta certa, mesmo com o
+# dump e o upload já concluídos: é sinal de que o disco não está saudável.
 for arquivo_count in "$DESTINO"/juris-*.dump.count "$DESTINO"/semanal-*.dump.count; do
   [[ -e "$arquivo_count" ]] || continue
   [[ -e "${arquivo_count%.count}" ]] || rm -- "$arquivo_count"

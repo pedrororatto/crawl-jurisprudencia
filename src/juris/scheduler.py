@@ -199,7 +199,17 @@ async def avaliar_gatilhos(
                 f"[{tribunal}] Bloqueio anti-robô no tema {r.tema_slug}. "
                 f"Coleta interrompida. Detalhe: {r.erro}",
             )
-        elif r.falhou and await _falhas_seguidas(session, tribunal, r.tema_slug, 3):
+        # O gatilho 2 afirma "falhou em 3 rodadas seguidas", uma frase sobre o
+        # histórico de rodadas incrementais. Filtrar o histórico em
+        # `_falhas_seguidas` não basta: sem esta guarda, uma rodada `--tema`
+        # que der timeout dispara a afirmação — que não é sobre ela — e queima
+        # a chave de cooldown compartilhada, suprimindo o alerta da
+        # incremental de verdade nas seis horas seguintes.
+        elif (
+            tipo_rodada == "incremental"
+            and r.falhou
+            and await _falhas_seguidas(session, tribunal, r.tema_slug, 3)
+        ):
             await alertar(
                 session,
                 f"falhas-seguidas:{tribunal}:{r.tema_slug}",

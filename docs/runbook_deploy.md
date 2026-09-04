@@ -172,8 +172,16 @@ parser do Compose. A saída do `openssl rand -base64 32` é segura (só
 (`CHAVE='va lor#estranho'`). Confira depois de editar:
 
 ```bash
-vps$ ( set -a; . ./.env; set +a; echo "shell consegue ler o .env: ok" )
+vps$ bash -ec 'set -a; . ./.env' \
+  && echo "OK: o bash consegue ler o .env" \
+  || echo "FALHOU: o bash não lê este .env; o backup vai recusar rodar"
 ```
+
+É `bash -ec` (processo separado), não `( set -e; ... )`: o bash **ignora** o
+`set -e` dentro de um subshell que faz parte de uma lista `&&`, e a versão
+com subshell aprovaria alegremente o arquivo quebrado. O `backup.sh` faz
+exatamente esta mesma checagem antes de tocar no banco, e recusa rodar com
+uma mensagem nomeada em vez de morrer com `command not found`.
 
 `.env` nunca é versionado (está no `.gitignore`). Confirme:
 
@@ -213,7 +221,10 @@ Agora, e só agora, rode a migração:
 vps$ docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
 ```
 
-Confirme que chegou em `006 (head)`:
+Confirme que chegou ao topo — a saída tem que terminar em `(head)`. **Não
+confira contra um número escrito aqui:** cada migration nova muda esse
+número, e um runbook desatualizado transformaria um deploy correto em
+"divergência". O que importa é o `(head)`.
 
 ```bash
 vps$ docker compose -f docker-compose.prod.yml run --rm api alembic current
@@ -239,13 +250,13 @@ instalação), em vez de começar de um banco vazio.
 Na Task 1 desta onda de trabalho, a tabela `alembic_version` do banco de
 desenvolvimento recebeu `alembic stamp 001` (o schema já existia antes de o
 histórico de migrations existir; o `stamp` só registrou onde ele estava,
-sem tentar recriar nada). Todas as migrations seguintes (002 a 006) foram
-aplicadas normalmente por cima disso.
+sem tentar recriar nada). Todas as migrations seguintes foram aplicadas
+normalmente por cima disso.
 
 Um `pg_dump` da máquina de desenvolvimento inclui a tabela
 `alembic_version` junto com os dados — ou seja, **o dump já chega com o
 histórico de migrations completo**, apontando para a revisão em que o banco
-de origem estava (hoje, `006`). Isso tem duas consequências práticas:
+de origem estava. Isso tem duas consequências práticas:
 
 - **Não rode `alembic stamp` nenhum na VPS.** O `stamp 001` já está dentro
   do dump que você vai restaurar; repeti-lo (ou rodar um `stamp` diferente)
@@ -300,7 +311,8 @@ dump recente):
 ```bash
 vps$ docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
 vps$ docker compose -f docker-compose.prod.yml run --rm api alembic current
-# esperado: 006 (head)
+# esperado: a revisão mais recente, marcada (head) — não confira contra um
+# número; ele muda a cada migration nova.
 ```
 
 ### 5.5. Verificação de integridade pós-restore
@@ -487,23 +499,29 @@ vps$ docker compose -f docker-compose.prod.yml exec -T db \
 Os gatilhos reais que rodam em produção (em `juris.scheduler.avaliar_gatilhos`
 e `juris.watchdog`) são:
 
-1. `bloqueio:<tribunal>:<tema>` — anti-robô detectado, dispara na hora.
-2. `falhas-seguidas:<tribunal>:<tema>` — três rodadas seguidas falhando no
-   mesmo tema.
-3. `rodada-vazia:<tribunal>` — nenhum tema da rodada devolveu resultado
-   algum.
+1. `bloqueio:<tribunal>:<tema>` — anti-robô detectado, dispara na hora, em
+   qualquer tipo de rodada.
+2. `falhas-seguidas:<tribunal>:<tema>` — três rodadas **incrementais**
+   seguidas falhando no mesmo tema.
+3. `rodada-vazia:<tribunal>` — nenhum tema da rodada **incremental** devolveu
+   resultado algum.
 4. `coleta-parada` (watchdog, processo separado) — nenhuma rodada bem
    sucedida em `JURIS_WATCHDOG_LIMITE_HORAS` (36h por padrão).
 
-**Ressalva sobre o gatilho 3.** A chave de cooldown de `rodada-vazia` é
-compartilhada entre rodada incremental e passo de backfill — não há uma
-chave por tipo de rodada. Hoje isso não importa: o backfill já alcançou
-janeiro de 2020 e está completo, então não há mais passos de backfill
-rodando. Se `JURIS_BACKFILL_INICIO` for movido para uma data mais antiga no
-futuro (reabrindo backfill), um mês legitimamente sem resultados durante o
-backfill pode consumir a janela de 6h e mascarar uma rodada incremental
-vazia de verdade que aconteça logo depois. Vale revisitar se isso
-acontecer.
+**Por que os gatilhos 2 e 3 só olham a rodada incremental.** Cada linha de
+`metricas_coleta` carrega um `tipo_rodada`: `incremental` (a rodada completa
+das 03:00), `periodo` (`--desde/--ate`, o que inclui todo passo de backfill)
+ou `tema` (`--tema`, o teste de fumaça da §9.6). Os gatilhos 2 e 3 fazem
+afirmações sobre a coleta diária — "falhou em 3 rodadas seguidas", "nenhum
+tema devolveu nada" —, e uma rodada filtrada não sustenta nenhuma das duas.
+
+Isso importa na prática por causa das **chaves de cooldown**, que são
+compartilhadas entre os tipos de rodada: `rodada-vazia:<tribunal>` é uma
+chave só. Se um passo de backfill num mês legitimamente vazio, ou o seu
+teste de fumaça, pudesse disparar o alerta, ele queimaria a janela de 6h e
+mascararia a rodada incremental vazia de verdade que viesse em seguida.
+Filtrar por `tipo_rodada` é o que impede isso — inclusive se
+`JURIS_BACKFILL_INICIO` for recuado no futuro, reabrindo o backfill.
 
 ---
 
@@ -644,8 +662,8 @@ vps$ docker compose -f docker-compose.prod.yml up -d --build
 **Ressalva sobre a migration 003 (prefixo `digital-` nos slugs).** O
 `downgrade` dela é funcional — remove o prefixo `digital-` de volta — mas
 **reescreve dados** (a coluna `temas` de toda `decisoes` e `tema_slug` de
-toda `execucoes`). Se o rollback cruzar essa revisão (de `006` para
-qualquer coisa abaixo de `003`), o `downgrade -1` sozinho não basta: rode
+toda `execucoes`). Se o rollback cruzar essa revisão (do topo para
+qualquer revisão abaixo de `003`), o `downgrade -1` sozinho não basta: rode
 `alembic downgrade <revisao-alvo>` explicitamente e confira o resultado com
 a mesma consulta da seção 5.5 antes de considerar o rollback concluído.
 Prefira, sempre que possível, resolver o problema com um `git checkout`

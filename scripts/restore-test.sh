@@ -5,6 +5,16 @@
 # Uso: scripts/restore-test.sh [arquivo-compose]
 set -euo pipefail
 
+# Mesmo motivo do backup.sh: o .env é onde JURIS_BACKUP_DIR pode ser
+# redefinido. Se só o backup.sh o lesse, ele gravaria num diretório e este
+# script procuraria noutro — "Nenhum dump em backups", exit 1, com o backup
+# perfeito no lugar certo.
+# Aqui basta ignorar um .env ilegível: este script só lê dele o
+# JURIS_BACKUP_DIR, e o backup.sh já falha com mensagem clara nesse caso.
+if [[ -f .env ]] && bash -ec 'set -a; . ./.env' 2>/dev/null; then
+  set -a; . ./.env; set +a
+fi
+
 COMPOSE="${1:-docker-compose.yml}"
 DESTINO="${JURIS_BACKUP_DIR:-backups}"
 CONTAINER="juris-restore-teste"
@@ -22,12 +32,35 @@ echo "Testando restore de $dump"
 minimo=""
 maximo=""
 if [[ -f "$dump.count" ]]; then
-  { read -r minimo; read -r maximo; } < "$dump.count"
-  echo "Decisões esperadas (de $dump.count): entre $minimo e $maximo"
+  # `|| true` nos dois `read`: sob `set -e`, um arquivo truncado faria o
+  # segundo `read` derrubar o script ANTES do pg_restore, sem uma palavra de
+  # diagnóstico — indistinguível de um backup corrompido. E a validação
+  # numérica é obrigatória porque a comparação abaixo é aritmética: lixo em
+  # "$minimo" viraria `unbound variable` no meio de uma avaliação, não uma
+  # mensagem legível.
+  { read -r minimo || true; read -r maximo || true; } < "$dump.count"
+  if [[ "$minimo" =~ ^[0-9]+$ && "$maximo" =~ ^[0-9]+$ ]]; then
+    echo "Decisões esperadas (de $dump.count): entre $minimo e $maximo"
+  else
+    echo "AVISO: $dump.count ilegível (esperadas duas linhas numéricas);" \
+         "usando checagem de sanidade."
+    minimo=""
+    maximo=""
+  fi
 else
   # Dump antigo, gerado antes desta correção, sem arquivo irmão. Cai para uma
   # relação de sanidade em vez de uma igualdade que não há como satisfazer.
   echo "Sem $dump.count (dump anterior a esta correção); usando checagem de sanidade."
+fi
+
+# Achado da cadeia do .env: se o backup parar de rodar (um .env malformado
+# derruba o backup.sh antes do pg_dump), este script continuaria dizendo "OK"
+# testando alegremente um dump de semanas atrás. Um backup velho passa no
+# teste de restore e ainda assim não protege nada.
+idade_h=$(( ( $(date +%s) - $(date -r "$dump" +%s) ) / 3600 ))
+if (( idade_h > 48 )); then
+  echo "AVISO: o dump mais recente tem ${idade_h}h. O backup diário pode ter" \
+       "parado de rodar — confira $DESTINO e logs/backup.log."
 fi
 
 contagem_viva="$(docker compose -f "$COMPOSE" exec -T db \
