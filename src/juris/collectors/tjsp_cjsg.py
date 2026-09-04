@@ -217,7 +217,10 @@ class TjspCjsgCollector:
         async with AsyncWebCrawler(config=browser_config) as crawler:
             crawler.crawler_strategy.set_hook("after_goto", self._after_goto)
             run_config = CrawlerRunConfig(
-                session_id=session_id, cache_mode=CacheMode.BYPASS, page_timeout=120_000
+                session_id=session_id,
+                cache_mode=CacheMode.BYPASS,
+                page_timeout=120_000,
+                verbose=False,
             )
 
             # A validação do reCAPTCHA invisível falha esporadicamente logo

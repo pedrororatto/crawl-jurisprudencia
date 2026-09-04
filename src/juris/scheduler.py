@@ -2,14 +2,14 @@
 
 Uso:
   python -m juris.scheduler --once                  # uma rodada completa agora
-  python -m juris.scheduler --once --tema lgpd      # só um tema
+  python -m juris.scheduler --once --tema digital-lgpd  # só um tema
   python -m juris.scheduler --once --max-paginas 3  # limitar páginas (teste)
   python -m juris.scheduler --once --desde 2026-01-01
   python -m juris.scheduler                         # daemon: roda todo dia às 03:00
 
 Job por período (backfill de um mês, percorre TODAS as páginas retornadas):
   python -m juris.scheduler --once --desde 2026-06-01 --ate 2026-06-30
-  python -m juris.scheduler --once --tema lgpd --desde 2026-06-01 --ate 2026-06-30
+  python -m juris.scheduler --once --tema digital-lgpd --desde 2026-06-01 --ate 2026-06-30
 
 Backfill histórico automático (mês a mês, do mês atual até backfill_inicio):
   python -m juris.scheduler --backfill-passo   # um mês por execução, e sai
@@ -30,6 +30,7 @@ from juris.config import settings
 from juris.db.engine import SessionLocal
 from juris.db.models import BackfillProgresso, Execucao
 from juris.lock import adquirir_trava_unica
+from juris.logging_config import configurar_logging
 from juris.pipeline.ingest import ingerir
 from juris.temas import Tema, carregar_temas
 
@@ -223,9 +224,7 @@ def _daemon() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configurar_logging()
     # Trava primeiro, antes de qualquer outra coisa: nenhuma invocação do
     # scheduler (daemon, --once ou --backfill-passo) pode rodar em paralelo
     # com outra — foi rodar isso em duplicidade que causou o bloqueio no e-SAJ.
