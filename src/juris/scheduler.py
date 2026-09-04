@@ -21,14 +21,17 @@ Backfill histórico automático (mês a mês, do mês atual até backfill_inicio
 import argparse
 import asyncio
 import logging
+import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from juris.alertas import alertar
 from juris.collectors.tjsp_cjsg import TjspCjsgCollector
 from juris.config import settings
 from juris.db.engine import SessionLocal
-from juris.db.models import BackfillProgresso, Execucao
+from juris.db.models import BackfillProgresso, Execucao, MetricaColeta
 from juris.lock import adquirir_trava_unica
 from juris.logging_config import configurar_logging
 from juris.pipeline.ingest import ingerir
@@ -75,14 +78,30 @@ async def _salvar_watermark(
 TODAS_AS_PAGINAS = 1_000_000
 
 
+@dataclass
+class ResultadoTema:
+    """O que uma coleta de tema rendeu. `resultados` é o total devolvido pela
+    busca (novas + já conhecidas) — é ele, não `novas`, que distingue uma
+    rodada tranquila de um parser quebrado."""
+
+    tema_slug: str
+    novas: int
+    atualizadas: int
+    paginas: int
+    resultados: int
+    falhou: bool
+    erro: str | None
+    duracao_s: float
+
+
 async def coletar_tema(
     tema: Tema,
     max_paginas: int | None = None,
     desde: date | None = None,
     ate: date | None = None,
-) -> int:
+) -> ResultadoTema:
     collector = TjspCjsgCollector()
-    inicio = await _obter_inicio(collector.tribunal, tema.slug, desde)
+    inicio_dt = await _obter_inicio(collector.tribunal, tema.slug, desde)
     fim = ate or date.today()
     if max_paginas is None:
         # Com período explícito (--desde/--ate) percorre tudo; na rodada
@@ -90,15 +109,19 @@ async def coletar_tema(
         max_paginas = TODAS_AS_PAGINAS if ate else settings.max_paginas_por_rodada
     logger.info(
         "Coletando tema %r (%s a %s, até %s páginas): %s",
-        tema.slug, inicio, fim, max_paginas, tema.busca,
+        tema.slug, inicio_dt, fim, max_paginas, tema.busca,
     )
 
-    total = 0
+    inicio = time.monotonic()
+    total = novas_total = atualizadas_total = paginas_total = 0
     maior_publicacao: date | None = None
-    async for pagina in collector.paginas(tema.busca, inicio, fim, max_paginas, tema.campo):
+    async for pagina in collector.paginas(tema.busca, inicio_dt, fim, max_paginas, tema.campo):
         async with SessionLocal() as session:
             novas, atualizadas = await ingerir(session, pagina.decisoes, tema.slug)
             await session.commit()
+        novas_total += novas
+        atualizadas_total += atualizadas
+        paginas_total += 1
         total += len(pagina.decisoes)
         datas = [d.data_publicacao for d in pagina.decisoes if d.data_publicacao]
         if datas:
@@ -110,7 +133,63 @@ async def coletar_tema(
         )
 
     await _salvar_watermark(collector.tribunal, tema.slug, maior_publicacao, total)
-    return total
+    return ResultadoTema(
+        tema_slug=tema.slug,
+        novas=novas_total,
+        atualizadas=atualizadas_total,
+        paginas=paginas_total,
+        resultados=total,
+        falhou=False,
+        erro=None,
+        duracao_s=time.monotonic() - inicio,
+    )
+
+
+async def _falhas_seguidas(session, tribunal: str, tema_slug: str, quantas: int) -> bool:
+    """True se as últimas `quantas` rodadas registradas falharam, todas elas."""
+    linhas = (
+        await session.execute(
+            select(MetricaColeta.falhou)
+            .where(
+                MetricaColeta.tribunal == tribunal,
+                MetricaColeta.tema_slug == tema_slug,
+            )
+            .order_by(MetricaColeta.rodada_em.desc())
+            .limit(quantas)
+        )
+    ).scalars().all()
+    return len(linhas) == quantas and all(linhas)
+
+
+async def avaliar_gatilhos(session, tribunal: str, resultados: list[ResultadoTema]) -> None:
+    """Gatilhos 1 a 3 do alerta. O gatilho 4 vive no juris.watchdog, fora
+    deste processo: se ele morrer, não avisa que morreu."""
+    if not resultados:
+        return
+
+    for r in resultados:
+        if r.falhou and r.erro and "BloqueioDetectado" in r.erro:
+            await alertar(
+                session,
+                f"bloqueio:{tribunal}:{r.tema_slug}",
+                f"[{tribunal}] Bloqueio anti-robô no tema {r.tema_slug}. "
+                f"Coleta interrompida. Detalhe: {r.erro}",
+            )
+        elif r.falhou and await _falhas_seguidas(session, tribunal, r.tema_slug, 3):
+            await alertar(
+                session,
+                f"falhas-seguidas:{tribunal}:{r.tema_slug}",
+                f"[{tribunal}] Tema {r.tema_slug} falhou em 3 rodadas seguidas. "
+                f"Último erro: {r.erro}",
+            )
+
+    if all(r.resultados == 0 for r in resultados):
+        await alertar(
+            session,
+            f"rodada-vazia:{tribunal}",
+            f"[{tribunal}] Nenhum dos {len(resultados)} temas devolveu resultado "
+            "algum nesta rodada. Suspeita de parser quebrado ou layout alterado.",
+        )
 
 
 async def rodada(
@@ -118,22 +197,44 @@ async def rodada(
     max_paginas: int | None = None,
     desde: date | None = None,
     ate: date | None = None,
-) -> int:
-    """Executa a coleta dos temas e retorna o número de temas que falharam."""
+) -> list[ResultadoTema]:
+    """Executa a coleta dos temas, grava as métricas e avalia os gatilhos de
+    alerta. Retorna o resultado de cada tema."""
     temas = carregar_temas(settings.temas_path)
     if tema_slug:
         temas = [t for t in temas if t.slug == tema_slug]
         if not temas:
             raise SystemExit(f"Tema {tema_slug!r} não existe em {settings.temas_path}")
-    falhas = 0
+
+    tribunal = TjspCjsgCollector.tribunal
+    resultados: list[ResultadoTema] = []
     for tema in temas:
+        inicio = time.monotonic()
         try:
-            qtd = await coletar_tema(tema, max_paginas, desde, ate)
-            logger.info("Tema %r: %s decisões processadas", tema.slug, qtd)
-        except Exception:
-            falhas += 1
+            resultado = await coletar_tema(tema, max_paginas, desde, ate)
+            logger.info("Tema %r: %s decisões processadas", tema.slug, resultado.resultados)
+        except Exception as exc:
             logger.exception("Falha ao coletar tema %r; seguindo para o próximo", tema.slug)
-    return falhas
+            resultado = ResultadoTema(
+                tema_slug=tema.slug, novas=0, atualizadas=0, paginas=0, resultados=0,
+                falhou=True, erro=f"{type(exc).__name__}: {exc}",
+                duracao_s=time.monotonic() - inicio,
+            )
+        resultados.append(resultado)
+
+    async with SessionLocal() as session:
+        session.add_all(
+            MetricaColeta(
+                tribunal=tribunal, tema_slug=r.tema_slug, novas=r.novas,
+                atualizadas=r.atualizadas, paginas=r.paginas, resultados=r.resultados,
+                falhou=r.falhou, erro=r.erro, duracao_s=r.duracao_s,
+            )
+            for r in resultados
+        )
+        await session.commit()
+        await avaliar_gatilhos(session, tribunal, resultados)
+
+    return resultados
 
 
 def _mes_anterior(d: date) -> date:
@@ -171,7 +272,8 @@ async def backfill_passo(tribunal: str = "TJSP") -> None:
 
     inicio, fim = proximo_mes, _fim_do_mes(proximo_mes)
     logger.info("Backfill %s: coletando %s a %s", tribunal, inicio, fim)
-    falhas = await rodada(desde=inicio, ate=fim)
+    resultados = await rodada(desde=inicio, ate=fim)
+    falhas = sum(1 for r in resultados if r.falhou)
     if falhas:
         # Não avança o ponteiro: o próximo passo tenta o mesmo mês de novo.
         logger.error(

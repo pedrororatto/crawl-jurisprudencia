@@ -1,11 +1,14 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
+    BigInteger,
+    Boolean,
     Computed,
     Date,
     DateTime,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -105,6 +108,35 @@ class Execucao(Base):
 
     __table_args__ = (
         UniqueConstraint("tribunal", "tema_slug", name="uq_execucoes_tribunal_tema"),
+    )
+
+
+class MetricaColeta(Base):
+    """Histórico de coleta, uma linha por tema por rodada.
+
+    A tabela `execucoes` responde "está rodando?". Esta responde "está
+    rendendo o de sempre?" — sem histórico não há como distinguir uma rodada
+    tranquila de um parser quebrado.
+    """
+
+    __tablename__ = "metricas_coleta"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    rodada_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    tribunal: Mapped[str] = mapped_column(String(10))
+    tema_slug: Mapped[str] = mapped_column(String(60))
+    novas: Mapped[int] = mapped_column(Integer, default=0)
+    atualizadas: Mapped[int] = mapped_column(Integer, default=0)
+    paginas: Mapped[int] = mapped_column(Integer, default=0)
+    resultados: Mapped[int] = mapped_column(Integer, default=0)
+    falhou: Mapped[bool] = mapped_column(Boolean, default=False)
+    erro: Mapped[str | None] = mapped_column(Text)
+    duracao_s: Mapped[float | None] = mapped_column(Numeric(10, 2))
+
+    __table_args__ = (
+        Index("ix_metricas_rodada", "tribunal", "tema_slug", "rodada_em"),
     )
 
 
