@@ -1,44 +1,47 @@
 # Termos curados de "direito digital" usados na busca livre do CJSG (e-SAJ/TJSP).
 # Sintaxe aceita pelo e-SAJ: aspas para frase exata, operadores E / OU / NÃO.
 # Este arquivo pode ser editado sem mexer em código; o scheduler relê a cada rodada.
+# Convenção de slug: <area>-<tema>. O prefixo de área evita colisão quando
+# outras áreas do direito entrarem — "dano-moral" e "prescrição" existem em
+# várias delas, e o slug fica gravado no array `temas` de cada decisão.
 temas:
-  - slug: lgpd
+  - slug: digital-lgpd
     nome: LGPD / Proteção de dados pessoais
     busca: '"Lei Geral de Proteção de Dados" OU "LGPD"'
 
-  - slug: marco-civil
+  - slug: digital-marco-civil
     nome: Marco Civil da Internet
     busca: '"Marco Civil da Internet"'
 
-  - slug: vazamento-dados
+  - slug: digital-vazamento-dados
     nome: Vazamento de dados
     busca: '"vazamento de dados"'
 
-  - slug: fraude-eletronica
+  - slug: digital-fraude-eletronica
     nome: Fraude eletrônica / golpes online
     busca: '"fraude eletrônica" OU "golpe do pix" OU "fraude bancária pela internet"'
 
-  - slug: crimes-ciberneticos
+  - slug: digital-crimes-ciberneticos
     nome: Crimes cibernéticos
     busca: '"crime cibernético" OU "estelionato digital" OU "invasão de dispositivo informático"'
 
-  - slug: remocao-conteudo
+  - slug: digital-remocao-conteudo
     nome: Remoção de conteúdo / responsabilidade de provedores
     busca: '"remoção de conteúdo" E "provedor"'
 
-  - slug: perfil-falso
+  - slug: digital-perfil-falso
     nome: Perfil falso em redes sociais
     busca: '"perfil falso"'
 
-  - slug: imagens-intimas
+  - slug: digital-imagens-intimas
     nome: Divulgação não consentida de imagens íntimas
     busca: '"pornografia de vingança" OU "divulgação de imagens íntimas"'
 
-  - slug: comercio-eletronico
+  - slug: digital-comercio-eletronico
     nome: Comércio eletrônico
     busca: '"comércio eletrônico" E ("fraude" OU "consumidor")'
 
-  - slug: assinatura-eletronica
+  - slug: digital-assinatura-eletronica
     nome: Assinatura e documento eletrônico
     busca: '"assinatura eletrônica" OU "assinatura digital"'
     campo: ementa

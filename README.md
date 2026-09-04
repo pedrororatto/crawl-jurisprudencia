@@ -44,14 +44,14 @@ docker compose up -d db
 uv run alembic upgrade head
 
 # coleta de teste (1 tema, 2 páginas)
-uv run python -m juris.scheduler --once --tema lgpd --max-paginas 2 --desde 2026-07-01
+uv run python -m juris.scheduler --once --tema digital-lgpd --max-paginas 2 --desde 2026-07-01
 
 # rodada completa de todos os temas (respeita watermark)
 uv run python -m juris.scheduler --once
 
 # job por período: máximo de 1 mês, percorre TODAS as páginas retornadas
 uv run python -m juris.scheduler --once --desde 2026-06-01 --ate 2026-06-30
-uv run python -m juris.scheduler --once --tema lgpd --desde 2026-06-01 --ate 2026-06-30
+uv run python -m juris.scheduler --once --tema digital-lgpd --desde 2026-06-01 --ate 2026-06-30
 
 # um passo do backfill histórico (coleta UM mês inteiro e retrocede o ponteiro)
 uv run python -m juris.scheduler --backfill-passo
