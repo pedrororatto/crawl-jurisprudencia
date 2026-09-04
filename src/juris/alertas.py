@@ -24,7 +24,13 @@ _TIMEOUT_SEGUNDOS = 10.0
 
 
 async def _enviar_telegram(mensagem: str) -> None:
-    """Envia de fato. Isolado numa função para o teste substituir."""
+    """Envia de fato. Isolado numa função para o teste substituir.
+
+    Atenção: se algum dia se habilitar logging DEBUG das bibliotecas httpx
+    ou httpcore, elas próprias podem registrar a URL da requisição — e a URL
+    carrega o token do bot. O cuidado abaixo com o logger deste módulo não
+    cobre esse caminho.
+    """
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=_TIMEOUT_SEGUNDOS) as client:
         resposta = await client.post(
@@ -53,7 +59,19 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
         logger.warning("Alerta não enviado (bot do Telegram não configurado): %s", mensagem)
         return False
 
-    if await _em_cooldown(session, chave):
+    try:
+        em_cooldown = await _em_cooldown(session, chave)
+    except Exception:
+        # Não conseguimos saber se a chave está em cooldown (conexão caiu,
+        # pool esgotado, etc.). Entre arriscar um alerta duplicado e arriscar
+        # engolir um alerta de verdade, o duplicado é o erro mais barato
+        # neste sistema — o alerta perdido é exatamente o modo de falha que
+        # este módulo existe para evitar. Por isso seguimos como se não
+        # estivesse em cooldown.
+        logger.error("Falha ao consultar cooldown de %r; enviando mesmo assim", chave)
+        em_cooldown = False
+
+    if em_cooldown:
         logger.info("Alerta %r suprimido por cooldown", chave)
         return False
 
@@ -65,11 +83,20 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
         logger.error("Falha ao enviar alerta %r; watchdog é a rede de segurança", chave)
         return False
 
-    registro = await session.get(AlertaEnviado, chave)
-    if registro is None:
-        session.add(AlertaEnviado(chave=chave, enviado_em=datetime.now(timezone.utc)))
-    else:
-        registro.enviado_em = datetime.now(timezone.utc)
-    await session.commit()
+    try:
+        registro = await session.get(AlertaEnviado, chave)
+        if registro is None:
+            session.add(AlertaEnviado(chave=chave, enviado_em=datetime.now(timezone.utc)))
+        else:
+            registro.enviado_em = datetime.now(timezone.utc)
+        await session.commit()
+    except Exception:
+        # A mensagem já foi entregue nesse ponto. Uma falha ao gravar o
+        # cooldown não pode virar "a entrega falhou" para quem chamou —
+        # o preço é um possível alerta duplicado na próxima rodada, não um
+        # alerta engolido nesta.
+        logger.error("Alerta %r entregue, mas falha ao gravar o cooldown", chave)
+        return True
+
     logger.info("Alerta %r enviado", chave)
     return True

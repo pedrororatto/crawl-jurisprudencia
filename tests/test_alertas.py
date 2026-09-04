@@ -53,6 +53,37 @@ async def test_alerta_volta_a_enviar_depois_do_cooldown(session, telegram_falso)
     assert await alertar(session, "bloqueio:TJSP", "de novo") is True
 
 
+async def test_cooldown_pinado_na_fronteira_da_janela(session, telegram_falso):
+    """Um minuto de cada lado da janela configurada, não uma margem folgada.
+
+    Pega tanto um `>=` acidental quanto um sinal invertido na comparação de
+    `alertas.py`, que uma margem de horas inteiras deixaria passar.
+    """
+    janela_horas = alertas.settings.alerta_cooldown_horas
+    await alertar(session, "bloqueio:TJSP", "primeira")
+
+    # Um minuto DENTRO da janela: ainda deve suprimir.
+    await session.execute(
+        text(
+            "UPDATE alertas_enviados SET enviado_em = now() - make_interval(hours => :horas) "
+            "+ interval '1 minute' WHERE chave = 'bloqueio:TJSP'"
+        ),
+        {"horas": janela_horas},
+    )
+    assert await alertar(session, "bloqueio:TJSP", "dentro da janela") is False
+
+    # Um minuto FORA da janela: deve voltar a enviar.
+    await session.execute(
+        text(
+            "UPDATE alertas_enviados SET enviado_em = now() - make_interval(hours => :horas) "
+            "- interval '1 minute' WHERE chave = 'bloqueio:TJSP'"
+        ),
+        {"horas": janela_horas},
+    )
+    assert await alertar(session, "bloqueio:TJSP", "fora da janela") is True
+    assert telegram_falso == ["primeira", "fora da janela"]
+
+
 async def test_falha_de_entrega_nao_propaga(session, monkeypatch):
     """Telegram fora do ar não pode derrubar a coleta."""
     monkeypatch.setattr(alertas.settings, "telegram_bot_token", "token-de-teste")
@@ -68,3 +99,36 @@ async def test_falha_de_entrega_nao_propaga(session, monkeypatch):
 async def test_sem_token_configurado_nao_quebra(session, monkeypatch):
     monkeypatch.setattr(alertas.settings, "telegram_bot_token", None)
     assert await alertar(session, "bloqueio:TJSP", "msg") is False
+
+
+async def test_falha_ao_consultar_cooldown_nao_propaga(session, telegram_falso, monkeypatch):
+    """Erro de banco ao ler o cooldown não pode derrubar a coleta.
+
+    A leitura falha, então tratamos como "não está em cooldown" — o alerta
+    perdido é o modo de falha que este módulo existe para evitar, então um
+    possível duplicado é o erro mais barato.
+    """
+
+    async def _scalar_explode(*args, **kwargs):
+        raise RuntimeError("conexão caiu")
+
+    monkeypatch.setattr(session, "scalar", _scalar_explode)
+    assert await alertar(session, "bloqueio:TJSP", "msg") is True
+    assert telegram_falso == ["msg"]
+
+
+async def test_falha_ao_gravar_cooldown_apos_envio_nao_propaga(
+    session, telegram_falso, monkeypatch
+):
+    """Falha ao gravar o cooldown depois do envio não pode virar "não enviei".
+
+    Nesse ponto a mensagem já foi entregue ao Telegram; dizer False ao
+    chamador seria mentir sobre o que aconteceu.
+    """
+
+    async def _commit_explode():
+        raise RuntimeError("conexão caiu")
+
+    monkeypatch.setattr(session, "commit", _commit_explode)
+    assert await alertar(session, "bloqueio:TJSP", "msg") is True
+    assert telegram_falso == ["msg"]
