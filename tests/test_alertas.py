@@ -9,7 +9,13 @@ from juris.alertas import alertar
 
 @pytest.fixture
 def telegram_falso(monkeypatch):
-    """Captura o que teria sido enviado, sem tocar a rede."""
+    """Captura o que teria sido enviado, sem tocar a rede.
+
+    Fixa também as credenciais: o teste não pode depender de um .env local
+    que só existe na máquina de quem escreveu o código.
+    """
+    monkeypatch.setattr(alertas.settings, "telegram_bot_token", "token-de-teste")
+    monkeypatch.setattr(alertas.settings, "telegram_chat_id", "chat-de-teste")
     enviadas: list[str] = []
 
     async def _enviar(mensagem: str) -> None:
@@ -49,6 +55,8 @@ async def test_alerta_volta_a_enviar_depois_do_cooldown(session, telegram_falso)
 
 async def test_falha_de_entrega_nao_propaga(session, monkeypatch):
     """Telegram fora do ar não pode derrubar a coleta."""
+    monkeypatch.setattr(alertas.settings, "telegram_bot_token", "token-de-teste")
+    monkeypatch.setattr(alertas.settings, "telegram_chat_id", "chat-de-teste")
 
     async def _explode(mensagem: str) -> None:
         raise RuntimeError("timeout")
