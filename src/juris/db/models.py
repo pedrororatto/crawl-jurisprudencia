@@ -106,3 +106,19 @@ class Execucao(Base):
     __table_args__ = (
         UniqueConstraint("tribunal", "tema_slug", name="uq_execucoes_tribunal_tema"),
     )
+
+
+class AlertaEnviado(Base):
+    """Cooldown de alerta.
+
+    Sem isto o canal se autodestrói: um tribunal bloqueado geraria centenas
+    de mensagens até o operador silenciar o bot — e o canal morre justamente
+    quando importa.
+    """
+
+    __tablename__ = "alertas_enviados"
+
+    chave: Mapped[str] = mapped_column(Text, primary_key=True)
+    enviado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

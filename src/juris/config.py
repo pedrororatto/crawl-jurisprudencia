@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     watermark_margem_dias: int = 2
     max_paginas_por_rodada: int = 50
     req_intervalo_segundos: float = 2.0
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    alerta_cooldown_horas: int = 6
+    watchdog_limite_horas: int = 36
 
 
 settings = Settings()
