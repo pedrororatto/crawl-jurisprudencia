@@ -76,5 +76,5 @@ class TemaInfo(BaseModel):
 
 class HealthInfo(BaseModel):
     status: str
-    total_decisoes: int
-    ultima_coleta: datetime | None
+    total_decisoes: int | None = None
+    ultima_coleta: datetime | None = None

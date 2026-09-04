@@ -6,6 +6,7 @@ from sqlalchemy import (
     Computed,
     Date,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -154,3 +155,42 @@ class AlertaEnviado(Base):
     enviado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ApiKey(Base):
+    """Chave de acesso à API.
+
+    O banco guarda somente o sha256 da chave; o valor em claro é exibido uma
+    única vez, na criação.
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    nome: Mapped[str] = mapped_column(String(100), unique=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # "publico": jurisprudência e legislação. "interno": acrescenta o acervo
+    # doutrinário do escritório (onda 5).
+    escopo: Mapped[str] = mapped_column(String(20), default="publico")
+    ativa: Mapped[bool] = mapped_column(Boolean, default=True)
+    limite_diario: Mapped[int | None] = mapped_column(Integer)
+    criada_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    ultimo_uso_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApiKeyUso(Base):
+    """Contagem diária por chave.
+
+    A chave primária (api_key_id, dia) faz a contagem se reiniciar sozinha a
+    cada dia, sem cron de reset, e já serve de base para cobrança.
+    """
+
+    __tablename__ = "api_key_uso"
+
+    api_key_id: Mapped[int] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True
+    )
+    dia: Mapped[date] = mapped_column(Date, primary_key=True)
+    requisicoes: Mapped[int] = mapped_column(Integer, default=0)

@@ -1,9 +1,10 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from juris.api.deps import get_session
 from juris.api.schemas import (
     DecisaoDetalhe,
     DecisaoResumo,
@@ -11,26 +12,19 @@ from juris.api.schemas import (
     PaginaDecisoes,
     TemaInfo,
 )
+from juris.apikeys import chave_opcional, exigir_chave
 from juris.config import settings
-from juris.db.engine import SessionLocal
-from juris.db.models import Decisao, Execucao
+from juris.db.models import ApiKey, Decisao, Execucao
 from juris.temas import carregar_temas
 
 router = APIRouter(prefix="/v1")
 
 
-async def get_session() -> AsyncSession:
-    async with SessionLocal() as session:
-        yield session
-
-
-async def api_key_auth(x_api_key: str | None = Header(default=None)) -> None:
-    """Ponto de encaixe da autenticação. No MVP a API é aberta; quando a venda
-    começar, valida-se a chave aqui sem mudar o contrato dos endpoints."""
-    return None
-
-
-@router.get("/decisoes", response_model=PaginaDecisoes, dependencies=[Depends(api_key_auth)])
+@router.get(
+    "/decisoes",
+    response_model=PaginaDecisoes,
+    dependencies=[Depends(exigir_chave("publico"))],
+)
 async def listar_decisoes(
     q: str | None = Query(
         default=None,
@@ -99,7 +93,9 @@ async def listar_decisoes(
 
 
 @router.get(
-    "/decisoes/{decisao_id}", response_model=DecisaoDetalhe, dependencies=[Depends(api_key_auth)]
+    "/decisoes/{decisao_id}",
+    response_model=DecisaoDetalhe,
+    dependencies=[Depends(exigir_chave("publico"))],
 )
 async def obter_decisao(
     decisao_id: int, session: AsyncSession = Depends(get_session)
@@ -110,7 +106,11 @@ async def obter_decisao(
     return DecisaoDetalhe.model_validate(decisao)
 
 
-@router.get("/temas", response_model=list[TemaInfo], dependencies=[Depends(api_key_auth)])
+@router.get(
+    "/temas",
+    response_model=list[TemaInfo],
+    dependencies=[Depends(exigir_chave("publico"))],
+)
 async def listar_temas(session: AsyncSession = Depends(get_session)) -> list[TemaInfo]:
     temas = carregar_temas(settings.temas_path)
     contagens = dict(
@@ -129,7 +129,18 @@ async def listar_temas(session: AsyncSession = Depends(get_session)) -> list[Tem
 
 
 @router.get("/health", response_model=HealthInfo)
-async def health(session: AsyncSession = Depends(get_session)) -> HealthInfo:
+async def health(
+    chave: ApiKey | None = Depends(chave_opcional),
+    session: AsyncSession = Depends(get_session),
+) -> HealthInfo:
+    """Chamador anônimo recebe só o estado.
+
+    Total de decisões e ritmo de coleta são informação de negócio: entregá-los
+    a qualquer varredura num IP público não tem contrapartida.
+    """
+    if chave is None:
+        return HealthInfo(status="ok")
+
     total = await session.scalar(select(func.count()).select_from(Decisao))
     ultima = await session.scalar(select(func.max(Execucao.ultima_execucao)))
     return HealthInfo(status="ok", total_decisoes=total or 0, ultima_coleta=ultima)

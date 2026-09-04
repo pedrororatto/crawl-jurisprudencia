@@ -73,9 +73,19 @@ uv run uvicorn juris.api.main:app --port 8000
 | `GET /v1/temas` | Temas configurados e contagem de decisões |
 | `GET /v1/health` | Status + timestamp da última coleta |
 
-Sem autenticação no MVP; o hook `api_key_auth` em
-[src/juris/api/routes.py](src/juris/api/routes.py) é o ponto de encaixe para
-API keys quando a venda começar.
+## Autenticação
+
+Todos os endpoints exigem `Authorization: Bearer <chave>`, exceto `/v1/health`,
+que responde `{"status": "ok"}` a chamador anônimo e só revela contagem e
+frescor da coleta para quem apresenta chave.
+
+```bash
+uv run python -m juris.apikeys criar --nome squad --escopo publico
+uv run python -m juris.apikeys listar
+uv run python -m juris.apikeys revogar --nome squad
+```
+
+A chave é exibida uma única vez, na criação; o banco guarda apenas o sha256.
 
 ## Testes
 
