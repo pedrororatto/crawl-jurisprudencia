@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select
 
 from juris.alertas import alertar
+from juris.collectors.base import BloqueioDetectadoError
 from juris.collectors.tjsp_cjsg import TjspCjsgCollector
 from juris.config import settings
 from juris.db.engine import SessionLocal
@@ -91,6 +92,11 @@ class ResultadoTema:
     resultados: int
     falhou: bool
     erro: str | None
+    # Nome da classe da exceção, guardado à parte de `erro`. Os gatilhos
+    # comparam por igualdade contra `BloqueioDetectadoError.__name__`; casar
+    # substring dentro da mensagem achatada faria um rename da classe
+    # rebaixar em silêncio o alerta de maior prioridade do projeto.
+    tipo_erro: str | None
     duracao_s: float
 
 
@@ -141,18 +147,29 @@ async def coletar_tema(
         resultados=total,
         falhou=False,
         erro=None,
+        tipo_erro=None,
         duracao_s=time.monotonic() - inicio,
     )
 
 
 async def _falhas_seguidas(session, tribunal: str, tema_slug: str, quantas: int) -> bool:
-    """True se as últimas `quantas` rodadas registradas falharam, todas elas."""
+    """True se as últimas `quantas` rodadas incrementais deste tema falharam,
+    todas elas.
+
+    O filtro por `incremental` não é cosmético: com o backfill ativo (um passo
+    a cada 10 minutos) entram ~144 linhas de período por tema por dia contra
+    UMA da incremental. Sem o filtro, três falhas incrementais seguidas nunca
+    ocupariam a janela — centenas de linhas de backfill bem-sucedidas ficam
+    entre elas — e o gatilho ficaria inalcançável para a coleta que ele existe
+    para vigiar.
+    """
     linhas = (
         await session.execute(
             select(MetricaColeta.falhou)
             .where(
                 MetricaColeta.tribunal == tribunal,
                 MetricaColeta.tema_slug == tema_slug,
+                MetricaColeta.tipo_rodada == "incremental",
             )
             .order_by(MetricaColeta.rodada_em.desc())
             .limit(quantas)
@@ -161,14 +178,21 @@ async def _falhas_seguidas(session, tribunal: str, tema_slug: str, quantas: int)
     return len(linhas) == quantas and all(linhas)
 
 
-async def avaliar_gatilhos(session, tribunal: str, resultados: list[ResultadoTema]) -> None:
+async def avaliar_gatilhos(
+    session, tribunal: str, resultados: list[ResultadoTema], tipo_rodada: str
+) -> None:
     """Gatilhos 1 a 3 do alerta. O gatilho 4 vive no juris.watchdog, fora
-    deste processo: se ele morrer, não avisa que morreu."""
+    deste processo: se ele morrer, não avisa que morreu.
+
+    `tipo_rodada` é obrigatório de propósito: os gatilhos 2 e 3 falam sobre a
+    rodada incremental completa, e um chamador que o omitisse cairia
+    justamente no defeito que o parâmetro corrige.
+    """
     if not resultados:
         return
 
     for r in resultados:
-        if r.falhou and r.erro and "BloqueioDetectado" in r.erro:
+        if r.falhou and r.tipo_erro == BloqueioDetectadoError.__name__:
             await alertar(
                 session,
                 f"bloqueio:{tribunal}:{r.tema_slug}",
@@ -183,13 +207,31 @@ async def avaliar_gatilhos(session, tribunal: str, resultados: list[ResultadoTem
                 f"Último erro: {r.erro}",
             )
 
-    if all(r.resultados == 0 for r in resultados):
+    # A spec define o gatilho 3 como "rodada INTEIRA em que nenhum tema
+    # retornou resultado algum". Uma rodada de tema único ou de período não é
+    # uma rodada inteira: avaliá-la aqui transformaria o teste de fumaça do
+    # runbook num alerta de "parser quebrado" e ainda queimaria por seis horas
+    # o cooldown compartilhado da chave, mascarando uma rodada de verdade.
+    if tipo_rodada == "incremental" and all(r.resultados == 0 for r in resultados):
         await alertar(
             session,
             f"rodada-vazia:{tribunal}",
             f"[{tribunal}] Nenhum dos {len(resultados)} temas devolveu resultado "
             "algum nesta rodada. Suspeita de parser quebrado ou layout alterado.",
         )
+
+
+def _tipo_de_rodada(tema_slug: str | None, ate: date | None) -> str:
+    """Classifica a rodada a partir dos próprios argumentos: filtrou tema, é
+    `tema`; delimitou fim de período (inclui o backfill), é `periodo`; senão é
+    a incremental diária. Função separada porque dois gatilhos de alerta
+    dependem da classificação e ela precisa ser testável sem subir uma
+    coleta."""
+    if tema_slug:
+        return "tema"
+    if ate:
+        return "periodo"
+    return "incremental"
 
 
 async def rodada(
@@ -206,6 +248,7 @@ async def rodada(
         if not temas:
             raise SystemExit(f"Tema {tema_slug!r} não existe em {settings.temas_path}")
 
+    tipo_rodada = _tipo_de_rodada(tema_slug, ate)
     tribunal = TjspCjsgCollector.tribunal
     resultados: list[ResultadoTema] = []
     for tema in temas:
@@ -218,6 +261,7 @@ async def rodada(
             resultado = ResultadoTema(
                 tema_slug=tema.slug, novas=0, atualizadas=0, paginas=0, resultados=0,
                 falhou=True, erro=f"{type(exc).__name__}: {exc}",
+                tipo_erro=type(exc).__name__,
                 duracao_s=time.monotonic() - inicio,
             )
         resultados.append(resultado)
@@ -225,14 +269,15 @@ async def rodada(
     async with SessionLocal() as session:
         session.add_all(
             MetricaColeta(
-                tribunal=tribunal, tema_slug=r.tema_slug, novas=r.novas,
-                atualizadas=r.atualizadas, paginas=r.paginas, resultados=r.resultados,
-                falhou=r.falhou, erro=r.erro, duracao_s=r.duracao_s,
+                tribunal=tribunal, tema_slug=r.tema_slug, tipo_rodada=tipo_rodada,
+                novas=r.novas, atualizadas=r.atualizadas, paginas=r.paginas,
+                resultados=r.resultados, falhou=r.falhou, erro=r.erro,
+                duracao_s=r.duracao_s,
             )
             for r in resultados
         )
         await session.commit()
-        await avaliar_gatilhos(session, tribunal, resultados)
+        await avaliar_gatilhos(session, tribunal, resultados, tipo_rodada)
 
     return resultados
 

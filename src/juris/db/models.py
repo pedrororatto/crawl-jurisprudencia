@@ -128,6 +128,13 @@ class MetricaColeta(Base):
     )
     tribunal: Mapped[str] = mapped_column(String(10))
     tema_slug: Mapped[str] = mapped_column(String(60))
+    # `incremental` (rodada completa diária), `periodo` (job --desde/--ate,
+    # inclusive o backfill) ou `tema` (rodada filtrada por --tema). Dois
+    # gatilhos de alerta só fazem sentido sobre a incremental, e sem esta
+    # coluna não havia como distingui-la das outras depois do fato.
+    tipo_rodada: Mapped[str] = mapped_column(
+        String(20), server_default="incremental", default="incremental"
+    )
     novas: Mapped[int] = mapped_column(Integer, default=0)
     atualizadas: Mapped[int] = mapped_column(Integer, default=0)
     paginas: Mapped[int] = mapped_column(Integer, default=0)

@@ -52,8 +52,11 @@ async def alertar(session: AsyncSession, chave: str, mensagem: str) -> bool:
     """Envia o alerta se a chave não estiver em cooldown.
 
     Devolve True se enviou, False se suprimiu, se não há bot configurado ou
-    se a entrega falhou. Nunca levanta exceção: o chamador é uma rodada de
-    coleta, e alerta não pode derrubar coleta.
+    se a entrega falhou. Não levanta exceção por falha de entrega nem por erro
+    recuperável de banco — o chamador é uma rodada de coleta, e alerta não pode
+    derrubar coleta. Perda total da conexão com o banco ainda propaga: os dois
+    `session.rollback()` de recuperação também precisam da conexão, e não há
+    nada de útil a fazer com uma sessão que não fala mais com o banco.
 
     Pré-condição: `session` não pode ter trabalho não commitado do chamador
     no momento da chamada. Uma falha de banco aqui é recuperada com

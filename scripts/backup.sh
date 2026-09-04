@@ -5,6 +5,10 @@
 # Cron:  0 4 * * * cd /opt/juris && scripts/backup.sh docker-compose.prod.yml
 set -euo pipefail
 
+# O cron não carrega .env. Sem isto o upload some em silêncio e o backup
+# passa a existir só na máquina que ele deveria proteger.
+[[ -f .env ]] && { set -a; . ./.env; set +a; }
+
 COMPOSE="${1:-docker-compose.yml}"
 DESTINO="${JURIS_BACKUP_DIR:-backups}"
 RETENCAO_DIARIOS="${JURIS_BACKUP_RETENCAO_DIARIOS:-7}"
@@ -14,6 +18,19 @@ mkdir -p "$DESTINO"
 destino_abs="$(cd "$DESTINO" && pwd)"
 carimbo="$(date +%Y%m%d-%H%M%S)"
 arquivo="$DESTINO/juris-$carimbo.dump"
+
+conta_decisoes() {
+  docker compose -f "$COMPOSE" exec -T db \
+    psql -U juris -d juris -tAc 'select count(*) from decisoes'
+}
+
+# Contagem ANTES e DEPOIS do dump. O snapshot do pg_dump é tomado no início
+# da execução dele, e o backfill commita a cada 10 minutos: uma única leitura
+# depois do dump poderia contar linhas que o dump não tem, e o restore-test
+# acusaria FALHOU com o backup íntegro — exatamente o falso alarme que o
+# arquivo irmão existe para eliminar. O que o dump contém está, com certeza,
+# dentro do intervalo [antes, depois].
+antes="$(conta_decisoes)"
 
 echo "Gerando $arquivo ..."
 docker compose -f "$COMPOSE" exec -T db \
@@ -27,6 +44,13 @@ echo "Dump gerado: $arquivo ($tamanho)"
 # depender de o host ter as ferramentas do Postgres instaladas.
 docker compose -f "$COMPOSE" exec -T db pg_restore --list < "$arquivo" >/dev/null
 echo "Dump íntegro."
+
+# Arquivo irmão com o intervalo, duas linhas: mínimo e máximo. É contra ele —
+# não contra o banco de produção "agora", que já ingeriu linhas novas até a
+# hora do restore-test — que scripts/restore-test.sh compara.
+depois="$(conta_decisoes)"
+printf '%s\n%s\n' "$antes" "$depois" > "$arquivo.count"
+echo "Decisões no dump: entre $antes e $depois"
 
 if [[ -n "${JURIS_BACKUP_S3_BUCKET:-}" ]]; then
   echo "Enviando para ${JURIS_BACKUP_S3_BUCKET} ..."
@@ -45,13 +69,16 @@ if [[ -n "${JURIS_BACKUP_S3_BUCKET:-}" ]]; then
       s3 cp "/backups/$(basename "$arquivo")" "s3://$JURIS_BACKUP_S3_BUCKET/diarios/$(basename "$arquivo")"
   echo "Upload concluído."
 else
-  echo "JURIS_BACKUP_S3_BUCKET não definido; mantendo apenas cópia local."
+  echo "AVISO: JURIS_BACKUP_S3_BUCKET não definido; mantendo apenas cópia local."
 fi
 
 # Retenção local: mantém os N diários mais recentes e, aos domingos, promove
 # uma cópia semanal.
 if [[ "$(date +%u)" == "7" ]]; then
   cp "$arquivo" "$DESTINO/semanal-$carimbo.dump"
+  # A cópia semanal leva o arquivo irmão junto: sem ele, restaurar um dump
+  # semanal daqui a um mês não teria contra o que ser conferido.
+  cp "$arquivo.count" "$DESTINO/semanal-$carimbo.dump.count"
 fi
 # `|| true`: enquanto não existir nenhum dump diário/semanal além do que
 # acabou de ser gerado, `ls` não acha nada e sai com erro — sem isto, o
@@ -59,5 +86,12 @@ fi
 # porque não havia nada para limpar ainda.
 ls -1t "$DESTINO"/juris-*.dump 2>/dev/null | tail -n +$((RETENCAO_DIARIOS + 1)) | xargs -r rm -- || true
 ls -1t "$DESTINO"/semanal-*.dump 2>/dev/null | tail -n +$((RETENCAO_SEMANAIS + 1)) | xargs -r rm -- || true
+
+# Sidecar de contagem órfão (dump que a retenção acima já apagou) não serve
+# mais para nada e só acumula.
+for arquivo_count in "$DESTINO"/juris-*.dump.count "$DESTINO"/semanal-*.dump.count; do
+  [[ -e "$arquivo_count" ]] || continue
+  [[ -e "${arquivo_count%.count}" ]] || rm -- "$arquivo_count"
+done
 
 echo "Backup concluído."

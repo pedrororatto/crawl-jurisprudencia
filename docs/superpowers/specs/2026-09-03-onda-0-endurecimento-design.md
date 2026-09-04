@@ -396,7 +396,7 @@ CREATE TABLE api_key_uso (
 );
 ```
 
-### Prefixo de área nos slugs (revisão 004)
+### Prefixo de área nos slugs (revisão 003)
 
 ```sql
 -- O guard NOT LIKE torna a migração inofensiva se reexecutada.
@@ -503,7 +503,7 @@ Acréscimos:
 | 6 | Bloqueio injetado dispara Telegram uma vez; repetição em 6 h é suprimida |
 | 7 | Watchdog dispara com watermark envelhecido |
 | 8 | `pytest` verde e log de uma rodada curta na casa de dezenas de linhas |
-| 9 | Após a revisão 004, a soma das contagens por tema é idêntica à anterior e todo slug começa com `digital-` |
+| 9 | Após a revisão 003, a soma das contagens por tema é idêntica à anterior e todo slug começa com `digital-` |
 
 ## 9. Evidência que motivou decisões
 

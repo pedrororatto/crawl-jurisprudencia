@@ -1,6 +1,12 @@
 from fastapi import FastAPI
 
 from juris.api.routes import router
+from juris.logging_config import configurar_logging
+
+# Subindo por `uvicorn juris.api.main:app` nada mais configura o logging: os
+# loggers `juris.*` ficariam sem handler, cairiam no lastResort em WARNING e
+# todo o INFO da aplicação sumiria.
+configurar_logging()
 
 app = FastAPI(
     title="Juris — API de Jurisprudência de Direito Digital",

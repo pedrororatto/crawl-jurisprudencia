@@ -163,6 +163,18 @@ Edite `.env` (`nano .env` ou `vim .env`) e preencha também:
   essas variáveis, o backup local ainda funciona; só o upload externo fica
   desligado.
 
+**Valores precisam ser válidos também para o shell.** O `scripts/backup.sh`
+carrega este mesmo `.env` com `source` (é assim que o upload sobrevive ao
+cron, que não carrega nada), e o `source` do bash é mais exigente que o
+parser do Compose. A saída do `openssl rand -base64 32` é segura (só
+`A-Za-z0-9+/=`); se algum token ou chave que você colar contiver espaço,
+`#`, aspas, `$` ou crase, envolva o valor em **aspas simples**
+(`CHAVE='va lor#estranho'`). Confira depois de editar:
+
+```bash
+vps$ ( set -a; . ./.env; set +a; echo "shell consegue ler o .env: ok" )
+```
+
 `.env` nunca é versionado (está no `.gitignore`). Confirme:
 
 ```bash
@@ -394,9 +406,15 @@ manhã:
 
 ```bash
 vps$ cd /opt/juris
-vps$ set -a && source .env && set +a
 vps$ ./scripts/backup.sh docker-compose.prod.yml
 ```
+
+O script carrega o `.env` sozinho (foi essa a correção que fez o upload
+sobreviver ao cron), então este passo manual exercita **exatamente** o mesmo
+caminho que as 4h da manhã vão exercitar — que é o ponto de rodá-lo. Se a
+saída trouxer `AVISO: JURIS_BACKUP_S3_BUCKET não definido`, o upload não
+aconteceu: revise a seção 3.3. É por esse prefixo `AVISO:` que se procura no
+`logs/backup.log` depois.
 
 Confira no console do seu provedor S3 (ou via `mc ls`, se ele for
 compatível) que o arquivo `diarios/juris-<timestamp>.dump` chegou. Isso já
@@ -409,7 +427,7 @@ travar a versão (`docker run --rm amazon/aws-cli ...`, sem tag). Isso
 significa que a imagem que o cron das 4h puxar numa madrugada pode não ser
 byte-a-byte a mesma testada aqui. Não há sinal automático se uma versão
 nova mudar o comportamento do `s3 cp` — o único jeito de perceber é o
-`restore-test.sh` mensal (seção 12) ou uma checagem manual do bucket.
+`restore-test.sh` mensal (seção 13) ou uma checagem manual do bucket.
 
 ---
 
@@ -533,8 +551,16 @@ vps$ ./scripts/restore-test.sh docker-compose.prod.yml
 ```
 
 Esperado: `OK: restore íntegro, <N> decisões.` — o script sobe um Postgres
-descartável, restaura o dump mais recente de `backups/` nele e compara a
-contagem com a do banco em produção.
+descartável, restaura o dump mais recente de `backups/` nele e confere a
+contagem contra o arquivo irmão `<dump>.count`, que o `backup.sh` gravou em
+torno do dump. São duas linhas, mínimo e máximo: o snapshot do `pg_dump` é
+tomado no início da execução, e o backfill commita a cada 10 minutos, então
+a única afirmação segura é que o dump contém algo dentro desse intervalo.
+
+A comparação **não** é contra o banco de produção agora: entre o dump e este
+teste a rodada incremental já ingeriu linhas novas, e comparar contra o banco
+vivo daria `FALHOU` todo mês com o backup íntegro — treinando o operador a
+ignorar justamente a checagem que existe para não ser ignorada.
 
 ### 9.6. Rodada curta de fumaça
 
@@ -551,7 +577,51 @@ sem `BloqueioDetectadoError`.
 
 ---
 
-## 10. Rollback
+## 10. Atualizar um deploy existente
+
+Este é o procedimento mais executado do runbook: já há um stack no ar e
+chegou um commit novo. **Não** é `git pull && docker compose up -d --build`.
+
+Esse atalho reinicia `api` e `crawler` contra o schema **antigo**: os dois
+esperam apenas `db: service_healthy`, nada os faz aguardar a migração, e o
+`restart: unless-stopped` os mantém em laço de reinício contra um banco que
+não tem as colunas que o código novo espera. A ordem correta é a mesma da
+primeira subida (§4) — banco de pé, migração aplicada, só então a aplicação:
+
+```bash
+vps$ cd /opt/juris
+vps$ git pull
+
+# 1. Constrói a imagem nova sem trocar nada do que está no ar ainda.
+vps$ docker compose -f docker-compose.prod.yml build
+
+# 2. Aplica as migrações com um container descartável, ANTES de reiniciar
+#    api e crawler. `run --rm` não mexe nos serviços em execução.
+vps$ docker compose -f docker-compose.prod.yml run --rm api alembic upgrade head
+
+# 3. Agora sim, troca os serviços pela imagem nova.
+vps$ docker compose -f docker-compose.prod.yml up -d
+```
+
+Confirme que a migração chegou ao topo:
+
+```bash
+vps$ docker compose -f docker-compose.prod.yml run --rm api alembic current
+```
+
+Esperado: a revisão mais recente marcada `(head)`.
+
+Depois rode o bloco de verificação da §9 (9.1 a 9.5). A rodada de fumaça da
+§9.6 é opcional aqui: ela bate no tribunal de verdade, e não há motivo para
+gastar uma requisição no e-SAJ a cada deploy se nada mudou no coletor.
+
+Se a migração falhar no passo 2, o stack antigo continua no ar intacto —
+esta é justamente a razão de aplicá-la antes do `up -d`. Corrija e repita;
+se precisar voltar, vá para a §11.
+
+---
+
+## 11. Rollback
 
 Nomeie cada deploy com uma tag antes de subir, para ter sempre um alvo
 previsível de rollback:
@@ -585,7 +655,7 @@ mais antigo.
 
 ---
 
-## 11. Fallback do Chromium — registro histórico
+## 12. Fallback do Chromium — registro histórico
 
 Esta seção existe para registrar uma decisão já resolvida, não um risco em
 aberto.
@@ -616,7 +686,7 @@ produção.
 
 ---
 
-## 12. Rotina mensal
+## 13. Rotina mensal
 
 - **Testar o restore de verdade**, não só confiar que o backup rodou:
 
