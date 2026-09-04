@@ -38,6 +38,10 @@ class Decisao(Base):
     ementa_markdown: Mapped[str | None] = mapped_column(Text)
     # HTML bruto do bloco do resultado, preservado para reprocessamento futuro.
     raw_html: Mapped[str | None] = mapped_column(Text)
+    # URL do acórdão no sistema de origem, gravada no momento da coleta.
+    url_origem: Mapped[str | None] = mapped_column(Text)
+    # sha256 da ementa, no formato "sha256:<hex>". Calculado no ingest.
+    content_hash: Mapped[str | None] = mapped_column(Text)
     # Slugs dos temas (config/temas.yaml) cujas buscas trouxeram esta decisão.
     temas: Mapped[list[str]] = mapped_column(ARRAY(String), server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
